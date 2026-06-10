@@ -1,6 +1,13 @@
 import sys
-# 🔥 CORREÇÃO CRUCIAL PARA WINDOWS (DPI AWARE)
-# Impede que o Windows aplique o "zoom de 125%/150%" que corta a tela e trava os controles
+
+# 1. FORÇAR CONFIGURAÇÃO DE TELA ANTES DE INICIALIZAR A URSINA
+# Isso impede que o motor gráfico quebre o tamanho da janela e trave os comandos
+from panda3d.core import loadPrcFileData
+loadPrcFileData("", "win-size 1280 720")
+loadPrcFileData("", "fullscreen false")
+loadPrcFileData("", "undecorated false")
+loadPrcFileData("", "window-title Chronos Express 3D")
+
 if sys.platform == "win32":
     try:
         import ctypes
@@ -12,22 +19,8 @@ from ursina import *
 import random
 import math
 
-# Inicializa o motor gráfico
+# Agora sim, inicializa o motor com a janela já configurada corretamente
 app = Ursina()
-
-# --- CONFIGURAÇÕES DE JANELA ULTRA ESTÁVEIS ---
-window.title = "Chronos Express 3D - Universal Shield Fix"
-window.fps_counter.enabled = True
-window.fullscreen = False
-window.borderless = False
-window.size = (1280, 720)       # Tamanho fixo seguro para qualquer monitor/notebook
-window.center_on_screen()       # Força a janela a ficar no centro perfeito da tela
-
-# Adiciona o Céu para eliminar o fundo cinza
-Sky()
-
-# Ativa uma iluminação padrão
-DirectionalLight(y=2, z=-3, x=1).look_at(Vec3(0,0,0))
 
 # --- VARIÁVEIS DE JOGO & ECONOMIA ---
 base_loop_time = 30.0
@@ -88,7 +81,11 @@ item = Entity(model='sphere', position=(100, 1.5, -100), scale=2, color=color.ye
 player = Entity(model='cube', color=color.cyan, position=(0, 1.5, 0), scale=(1.5, 3, 1.5), collider='box')
 Entity(parent=player, model='cube', color=color.white, position=(0, 0.4, 0.4), scale=(0.8, 0.2, 0.2))
 
-# Câmera Estável
+# Cenário de fundo
+Sky()
+DirectionalLight(y=2, z=-3, x=1).look_at(Vec3(0,0,0))
+
+# Câmera Estável Inicial
 camera.parent = scene
 camera.position = (0, 15, -25)
 
@@ -133,15 +130,19 @@ def input(key):
     if key == 'space' and not is_jumping and startup_buffer <= 0: 
         is_jumping, vertical_velocity = True, jump_height
 
-# Buffer de tempo para o sistema respirar antes de começar o jogo
-startup_buffer = 1.2
+# Pequeno atraso seguro para estabilizar a janela
+startup_buffer = 1.0
 
 def update():
     global time_left, deliveries_made, time_cores, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity, in_shop, dash_cooldown, startup_buffer
     
+    # Garante que a câmera foque no jogador mesmo durante o carregamento inicial
+    camera.position = player.position - player.forward * 25 + Vec3(0, 12, 0)
+    camera.look_at(player.position + Vec3(0, 2, 0))
+
     if startup_buffer > 0:
         startup_buffer -= time.dt
-        status_text.text = "ESTABILIZANDO JANELA DO SISTEMA... AGUARDE"
+        status_text.text = "ESTABILIZANDO ENGINE... AGUARDE"
         return
 
     if in_shop: 
@@ -149,19 +150,24 @@ def update():
         return
 
     dt = min(time.dt, 0.03)
-        
     time_left -= dt
     elapsed_time += dt
     if dash_cooldown > 0: dash_cooldown -= dt
     
     score_text.text = f'Entregas: {deliveries_made}\nNúcleos: {time_cores}'
     
-    # Rotação usando os nomes certos da Ursina ('arrow left' / 'arrow right')
-    turn_input = (held_keys['l'] - held_keys['j']) + (held_keys['arrow right'] - held_keys['arrow left'])
+    # Suporte universal para qualquer mapeamento de setas (arrow left / left arrow)
+    arrow_left_active = max(held_keys['arrow left'], held_keys['left arrow'])
+    arrow_right_active = max(held_keys['arrow right'], held_keys['right arrow'])
+    arrow_up_active = max(held_keys['arrow up'], held_keys['up arrow'])
+    arrow_down_active = max(held_keys['arrow down'], held_keys['down arrow'])
+
+    # Rotação do jogador
+    turn_input = (held_keys['l'] - held_keys['j']) + (arrow_right_active - arrow_left_active)
     player.rotation_y += turn_input * 140.0 * dt
     
-    # Movimentação usando os nomes certos ('arrow up' / 'arrow down')
-    move_forward = (held_keys['w'] - held_keys['s']) + (held_keys['arrow up'] - held_keys['arrow down'])
+    # Movimentação do jogador
+    move_forward = (held_keys['w'] - held_keys['s']) + (arrow_up_active - arrow_down_active)
     move_sideways = (held_keys['d'] - held_keys['a'])
     
     current_speed = player_speed
@@ -184,7 +190,7 @@ def update():
         if not raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_dir, distance=2.0, ignore=(player,)).hit: 
             player.position += move_dir * current_speed * dt
             
-    # Movimento dos Drones Inimigos
+    # Drones Inimigos
     for d in drones:
         t_pos = Vec3(d.target_x, d.y, d.target_z)
         if distance(d.position, t_pos) > 1.0: 
@@ -205,10 +211,6 @@ def update():
             player.y = 1.5
             is_jumping = False
             vertical_velocity = 0
-        
-    # Câmera Estável em terceira pessoa
-    camera.position = player.position - player.forward * 25 + Vec3(0, 12, 0)
-    camera.look_at(player.position + Vec3(0, 2, 0))
     
     # Animação da Bateria
     if item.enabled: 
@@ -239,7 +241,6 @@ def update():
         status_text.color = color.yellow
         respawn_item()
         
-    # Fim do Tempo do Loop -> Abre a Loja de Upgrades
     if time_left <= 0: 
         has_item = False
         player.position = (0, 1.5, 0)
