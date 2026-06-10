@@ -1,0 +1,231 @@
+from ursina import *
+import random
+import math
+import sys
+
+# Inicializa o motor do jogo 3D
+app = Ursina()
+
+# Configurações de janela
+window.fps_counter.enabled = True
+window.title = "Chronos Express 3D - Dynamic Camera Fixed"
+window.borderless = False
+
+# --- CONFIGURAÇÕES DO LOOP TEMPORAL ---
+LOOP_TIME = 30.0
+time_left = LOOP_TIME
+deliveries_made = 0
+has_item = False
+elapsed_time = 0.0
+
+# --- MAPA E CENÁRIO 3D ---
+floor = Entity(
+    model='cube', 
+    scale=(100, 0.1, 100), 
+    y=0,
+    color=color.black, 
+    texture='white_cube', 
+    texture_scale=(50, 50),
+    collider='box'
+)
+
+# Paredes Invisíveis Limitadoras (Barreiras de borda)
+# Ajustado para y=1 para garantir colisão de raio da câmera
+wall_left = Entity(model='cube', scale=(1, 30, 100), x=-50, y=1, color=color.dark_gray, collider='box')
+wall_right = Entity(model='cube', scale=(1, 30, 100), x=50, y=1, color=color.dark_gray, collider='box')
+wall_back = Entity(model='cube', scale=(100, 30, 1), z=-50, y=1, color=color.dark_gray, collider='box')
+wall_front = Entity(model='cube', scale=(100, 30, 1), z=50, y=1, color=color.dark_gray, collider='box')
+
+# Obstáculos/Prédios
+buildings = []
+neon_colors = [color.magenta, color.cyan, color.violet, color.blue]
+
+for i in range(25):
+    bx = random.randint(-42, 42)
+    bz = random.randint(-42, 42)
+    if (abs(bx) > 12 or abs(bz) > 12) and (distance((bx, 0, bz), (-30, 0, 30)) > 15):
+        b = Entity(
+            model='cube',
+            position=(bx, random.randint(5, 12), bz),
+            scale=(random.randint(5, 10), random.randint(10, 25), random.randint(5, 10)),
+            color=random.choice(neon_colors),
+            collider='box'
+        )
+        buildings.append(b)
+
+# --- ENTIDADES ---
+base_delivery = Entity(
+    model='cube',
+    position=(-30, 2, 30),
+    scale=(8, 4, 8),
+    color=color.green,
+    collider='box'
+)
+base_light = Entity(model='sphere', position=(-30, 5, 30), scale=2, color=color.lime)
+
+item = Entity(
+    model='sphere',
+    position=(30, 1.5, -30),
+    scale=1.5,
+    color=color.yellow,
+    collider='sphere'
+)
+
+# --- JOGADOR ---
+player = Entity(model='cube', color=color.blue, position=(0, 1, 0), scale=(1.5, 2, 1.5), collider='box')
+
+# 🛠️ AJUSTE DE CÂMERA: Criamos um container para a colisão da câmera
+camera_container = Entity(parent=player)
+
+# Câmera em terceira pessoa agora acoplada ao container
+camera.parent = camera_container
+camera.rotation_x = 22 # Inclinação fixa
+
+# Mouse livre
+mouse.locked = False
+mouse.visible = True
+
+# Velocidades calibradas
+ROTATION_SPEED = 140.0  
+player_speed = 35.0   
+jump_height = 14.0    
+is_jumping = False
+vertical_velocity = 0
+
+# Configurações de colisão de câmera
+CAMERA_TARGET_DISTANCE = -18 # Onde a câmera GOSTARIA de estar (Z negativo)
+CAMERA_TARGET_HEIGHT = 7     # Onde a câmera GOSTARIA de estar (Y positivo)
+
+# --- INTERFACE DO USUÁRIO (UI) ---
+timer_text = Text(text='', position=(0.5, 0.4), scale=2, origin=(0,0), color=color.white)
+score_text = Text(text=f'Entregas: {deliveries_made}', position=(-0.7, 0.4), scale=1.5, color=color.green)
+status_text = Text(text='BUSQUE A BATERIA AMARELA!', position=(0, -0.4), scale=1.5, origin=(0,0), color=color.yellow)
+help_text = Text(text='[WASD] Correr | [I K J L] Câmera | [ESPAÇO] Pular | [ESC] Sair', position=(-0.8, -0.45), scale=1.2, color=color.light_gray)
+
+def respawn_item():
+    valid_spawn = False
+    while not valid_spawn:
+        rx = random.randint(-43, 43)
+        rz = random.randint(-43, 43)
+        if distance((rx, 0, rz), base_delivery.position) > 30 and distance((rx, 0, rz), (0, 0, 0)) > 15:
+            item.x = rx
+            item.z = rz
+            valid_spawn = True
+    item.y = 1.5
+    item.enable() 
+
+respawn_item()
+
+def input(key):
+    global is_jumping, vertical_velocity
+    if key == 'escape':
+        sys.exit()
+        
+    if key == 'space' and not is_jumping:
+        is_jumping = True
+        vertical_velocity = jump_height
+
+# --- LOOP DE ATUALIZAÇÃO ---
+def update():
+    global time_left, deliveries_made, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity
+    
+    time_left -= time.dt 
+    elapsed_time += time.dt
+    
+    # CÂMERA (I K J L)
+    look_horizontal = held_keys['l'] - held_keys['j']
+    player.rotation_y += look_horizontal * ROTATION_SPEED * time.dt
+    
+    # SISTEMA DE CONTROLE VERTICAL DA CÂMERA (Via container)
+    look_vertical = held_keys['k'] - held_keys['i']
+    camera_container.rotation_x += look_vertical * ROTATION_SPEED * time.dt
+    camera_container.rotation_x = clamp(camera_container.rotation_x, -10, 60) # Ajustado o clamp
+
+    # MOVIMENTAÇÃO DO JOGADOR
+    self_forward = held_keys['w'] - held_keys['s']
+    self_right = held_keys['d'] - held_keys['a']
+
+    move_direction = player.forward * self_forward + player.right * self_right
+    
+    if move_direction.length() > 0:
+        move_direction = move_direction.normalized()
+        
+        # COLISÃO DO JOGADOR POR RAYCASTING
+        hit_info = raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_direction, distance=1.5, ignore=(player,))
+        
+        if not hit_info.hit:
+            player.position += move_direction * player_speed * time.dt
+
+    # 🛠️ NOVO SISTEMA DE COLISÃO DE CÂMERA (Previne tela cinza)
+    # A posição pretendida da câmera baseada no container e rotação do player
+    desired_camera_pos = player.position + (player.forward * CAMERA_TARGET_DISTANCE) + Vec3(0, CAMERA_TARGET_HEIGHT, 0)
+    
+    # Projeta um raio do jogador (altura da cintura) na direção da posição pretendida da câmera
+    camera_hit_info = raycast(origin=player.position + Vec3(0, 1, 0), direction=desired_camera_pos - (player.position + Vec3(0, 1, 0)), distance=distance(player.position + Vec3(0, 1, 0), desired_camera_pos), ignore=(player, camera,))
+    
+    # Se bater em algo, aproxima a câmera do player para ficar na frente da parede
+    if camera_hit_info.hit:
+        # Coloca a câmera levemente à frente do ponto de impacto do raio
+        camera.position = (0, lerp(camera.position.y, CAMERA_TARGET_HEIGHT / 2, time.dt * 15), lerp(camera.position.z, CAMERA_TARGET_DISTANCE / 2, time.dt * 15))
+    else:
+        # Se o caminho estiver livre, volta a câmera para a posição pretendida suavemente
+        camera.position = (0, lerp(camera.position.y, CAMERA_TARGET_HEIGHT, time.dt * 15), lerp(camera.position.z, CAMERA_TARGET_DISTANCE, time.dt * 15))
+
+    # FÍSICA DO PULO E GRAVIDADE
+    if is_jumping:
+        player.y += vertical_velocity * time.dt
+        vertical_velocity -= 35 * time.dt # Gravidade
+        
+        if player.y <= 1:
+            player.y = 1
+            is_jumping = False
+            vertical_velocity = 0
+
+    # Animação da Bateria
+    if item.enabled:
+        item.rotation_y += 45 * time.dt
+        item.y = 1.5 + math.sin(elapsed_time * 5) * 0.3
+
+    # Interface
+    if time_left <= 5:
+        timer_text.color = color.red
+        timer_text.scale = 2 + math.sin(elapsed_time * 20) * 0.2
+    else:
+        timer_text.color = color.white
+        timer_text.scale = 2
+
+    timer_text.text = f"{max(0.0, time_left):.1f}s"
+    
+    # Detecção de Alvos
+    if not has_item and item.enabled:
+        if distance(player.position, item.position) < 3.5:
+            has_item = True
+            item.disable() 
+            status_text.text = "BATERIA CAPTURADA! VÁ ATÉ A BASE VERDE!"
+            status_text.color = color.lime
+
+    if has_item:
+        if distance(player.position, base_delivery.position) < 6.5:
+            deliveries_made += 1
+            score_text.text = f'Entregas: {deliveries_made}'
+            has_item = False
+            status_text.text = "ENTREGA FEITA! ADIANDO O APOCALIPSE..."
+            status_text.color = color.yellow
+            respawn_item()
+            player_speed += 2.0 # Bônus de velocidadeacumulativo
+
+    # RESET DO LOOP
+    if time_left <= 0:
+        time_left = LOOP_TIME
+        has_item = False
+        status_text.text = "O MUNDO EXPLODIU! REINICIANDO TIMELINE..."
+        status_text.color = color.red
+        
+        player.position = (0, 1, 0)
+        player.rotation = (0, 0, 0)
+        camera.position = (0, CAMERA_TARGET_HEIGHT, CAMERA_TARGET_DISTANCE)
+        camera_container.rotation_x = 0
+        
+        respawn_item()
+
+app.run()
