@@ -1,12 +1,13 @@
 import sys
 
-# 1. FORÇAR CONFIGURAÇÃO DE TELA ANTES DE INICIALIZAR A URSINA
-# Isso impede que o motor gráfico quebre o tamanho da janela e trave os comandos
+# 1. FORÇAR MODO DE COMPATIBILIDADE GRÁFICA ANTES DE TUDO
 from panda3d.core import loadPrcFileData
 loadPrcFileData("", "win-size 1280 720")
 loadPrcFileData("", "fullscreen false")
-loadPrcFileData("", "undecorated false")
-loadPrcFileData("", "window-title Chronos Express 3D")
+loadPrcFileData("", "window-title Chronos Express 3D - Safe Mode")
+# Força o motor a usar uma renderização básica para evitar tela preta em GPUs integradas
+loadPrcFileData("", "framebuffer-hardware true")
+loadPrcFileData("", "framebuffer-software false")
 
 if sys.platform == "win32":
     try:
@@ -19,7 +20,7 @@ from ursina import *
 import random
 import math
 
-# Agora sim, inicializa o motor com a janela já configurada corretamente
+# Inicializa o motor
 app = Ursina()
 
 # --- VARIÁVEIS DE JOGO & ECONOMIA ---
@@ -40,14 +41,15 @@ speed_lvl = 1
 jump_lvl = 1
 time_lvl = 1
 
-# --- MAPA GIGANTE & CONTEÚDO ---
-floor = Entity(model='cube', scale=(300, 0.1, 300), y=0, color=color.black, texture='white_cube', texture_scale=(150, 150), collider='box')
+# --- MAPA SEGURO (SEM TEXTURAS QUE CAUSAM TELA PRETA) ---
+# Substituí o 'white_cube' por cor sólida (cinza escuro) para evitar falha de carregamento
+floor = Entity(model='cube', scale=(300, 0.1, 300), y=0, color=color.dark_gray, collider='box')
 
 # Barreiras externas
-Entity(model='cube', scale=(5, 50, 300), x=-150, y=1, color=color.dark_gray, collider='box')
-Entity(model='cube', scale=(5, 50, 300), x=150, y=1, color=color.dark_gray, collider='box')
-Entity(model='cube', scale=(300, 50, 5), z=-150, y=1, color=color.dark_gray, collider='box')
-Entity(model='cube', scale=(300, 50, 5), z=150, y=1, color=color.dark_gray, collider='box')
+Entity(model='cube', scale=(5, 50, 300), x=-150, y=1, color=color.gray, collider='box')
+Entity(model='cube', scale=(5, 50, 300), x=150, y=1, color=color.gray, collider='box')
+Entity(model='cube', scale=(300, 50, 5), z=-150, y=1, color=color.gray, collider='box')
+Entity(model='cube', scale=(300, 50, 5), z=150, y=1, color=color.gray, collider='box')
 
 # Prédios Neon
 neon_colors = [color.magenta, color.cyan, color.violet, color.blue]
@@ -81,11 +83,11 @@ item = Entity(model='sphere', position=(100, 1.5, -100), scale=2, color=color.ye
 player = Entity(model='cube', color=color.cyan, position=(0, 1.5, 0), scale=(1.5, 3, 1.5), collider='box')
 Entity(parent=player, model='cube', color=color.white, position=(0, 0.4, 0.4), scale=(0.8, 0.2, 0.2))
 
-# Cenário de fundo
+# Cenário e Luzes Básicas
 Sky()
 DirectionalLight(y=2, z=-3, x=1).look_at(Vec3(0,0,0))
 
-# Câmera Estável Inicial
+# Câmera Estável
 camera.parent = scene
 camera.position = (0, 15, -25)
 
@@ -130,13 +132,13 @@ def input(key):
     if key == 'space' and not is_jumping and startup_buffer <= 0: 
         is_jumping, vertical_velocity = True, jump_height
 
-# Pequeno atraso seguro para estabilizar a janela
-startup_buffer = 1.0
+# Reduzido o tempo de espera para ação imediata
+startup_buffer = 0.5
 
 def update():
     global time_left, deliveries_made, time_cores, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity, in_shop, dash_cooldown, startup_buffer
     
-    # Garante que a câmera foque no jogador mesmo durante o carregamento inicial
+    # Mantém a câmera travada no jogador desde o frame 1
     camera.position = player.position - player.forward * 25 + Vec3(0, 12, 0)
     camera.look_at(player.position + Vec3(0, 2, 0))
 
@@ -156,17 +158,17 @@ def update():
     
     score_text.text = f'Entregas: {deliveries_made}\nNúcleos: {time_cores}'
     
-    # Suporte universal para qualquer mapeamento de setas (arrow left / left arrow)
+    # Mapeamento duplo simultâneo de setas (Evita bugs de biblioteca)
     arrow_left_active = max(held_keys['arrow left'], held_keys['left arrow'])
     arrow_right_active = max(held_keys['arrow right'], held_keys['right arrow'])
     arrow_up_active = max(held_keys['arrow up'], held_keys['up arrow'])
     arrow_down_active = max(held_keys['arrow down'], held_keys['down arrow'])
 
-    # Rotação do jogador
+    # Rotação
     turn_input = (held_keys['l'] - held_keys['j']) + (arrow_right_active - arrow_left_active)
     player.rotation_y += turn_input * 140.0 * dt
     
-    # Movimentação do jogador
+    # Movimentação
     move_forward = (held_keys['w'] - held_keys['s']) + (arrow_up_active - arrow_down_active)
     move_sideways = (held_keys['d'] - held_keys['a'])
     
@@ -190,7 +192,7 @@ def update():
         if not raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_dir, distance=2.0, ignore=(player,)).hit: 
             player.position += move_dir * current_speed * dt
             
-    # Drones Inimigos
+    # Drones
     for d in drones:
         t_pos = Vec3(d.target_x, d.y, d.target_z)
         if distance(d.position, t_pos) > 1.0: 
@@ -203,7 +205,7 @@ def update():
             status_text.text = "DRONE TE CAÇOU! -6 SEGUNDOS!"
             status_text.color = color.orange
             
-    # Gravidade e Pulo
+    # Gravidade
     if is_jumping:
         player.y += vertical_velocity * dt
         vertical_velocity -= 38 * dt 
@@ -217,7 +219,7 @@ def update():
         item.rotation_y += 45 * dt
         item.y = 1.5 + math.sin(elapsed_time * 5) * 0.3
         
-    # Interface do Cronômetro
+    # UI do Cronômetro
     if time_left <= 5: 
         timer_text.color = color.red
         timer_text.scale = 2.5 + math.sin(elapsed_time * 20) * 0.2
@@ -226,7 +228,7 @@ def update():
         timer_text.scale = 2.5
     timer_text.text = f"{max(0.0, time_left):.1f}s"
     
-    # Coleta de Itens e Entrega
+    # Regras de Coleta e Entrega
     if not has_item and item.enabled and distance(player.position, item.position) < 4.5: 
         has_item = True
         status_text.text = "BATERIA COLETADA! LEVE ATÉ A BASE VERDE!"
