@@ -1,0 +1,273 @@
+import pygame
+import random
+import sys
+import math
+
+# Inicialização do motor do jogo
+pygame.init()
+
+# Configurações da tela (Resolução retro-moderna)
+WIDTH, HEIGHT = 900, 700
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("⏳ Chronos Express: 30s To Doomsday")
+clock = pygame.time.Clock()
+
+# --- PALETA DE CORES CYBERPUNK (NEON) ---
+BLACK     = (10, 10, 15)
+GRID_BLUE = (20, 40, 65)
+WHITE     = (240, 240, 255)
+CYAN      = (0, 255, 244)    # Jogador Atual
+PURPLE    = (188, 19, 254)   # Fantasma do Loop Anterior
+YELLOW    = (255, 234, 0)    # Urânio / Bateria Temporal
+GREEN     = (57, 255, 20)    # Base de Entrega / Cientistas
+RED       = (255, 0, 85)     # Sobrecarga / Fim do Mundo
+
+# Fontes
+font = pygame.font.SysFont("Courier New", 22, bold=True)
+large_font = pygame.font.SysFont("Courier New", 50, bold=True)
+
+# --- CONFIGURAÇÕES DO JOGO ---
+LOOP_TIME = 30.0
+persistent_credits = 0
+total_deliveries = 0
+current_loop = 1
+
+# Histórico para os Fantasmas (Guarda posições por frame)
+current_run_history = []
+past_run_history = []
+
+class Player:
+    def __init__(self):
+        self.size = 24
+        self.reset_pos()
+        self.speed = 6.0
+        self.has_item = False
+        self.trail = []
+
+    def reset_pos(self):
+        self.x, self.y = WIDTH // 2, HEIGHT // 2
+        self.has_item = False
+        self.trail = []
+
+    def move(self, keys):
+        dx, dy = 0, 0
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]:  dx = -1
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: dx = 1
+        if keys[pygame.K_UP] or keys[pygame.K_w]:    dy = -1
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]:  dy = 1
+
+        # Normaliza vetor para diagonal não ser mais rápida (Lógica Pro)
+        if dx != 0 and dy != 0:
+            dx *= 0.7071
+            dy *= 0.7071
+
+        self.x += dx * self.speed
+        self.y += dy * self.speed
+
+        # Bordas
+        self.x = max(20, min(WIDTH - 20 - self.size, self.x))
+        self.y = max(20, min(HEIGHT - 20 - self.size, self.y))
+
+        # Efeito de rastro cyberpunk
+        self.trail.append((self.x, self.y))
+        if len(self.trail) > 8:
+            self.trail.pop(0)
+
+    def draw(self, surface):
+        # Desenha o Rastro (Motion Blur)
+        for i, pos in enumerate(self.trail):
+            alpha = int((i / len(self.trail)) * 150)
+            trail_color = (0, 255, 244, alpha)
+            s = pygame.Surface((self.size, self.size), pygame.SRCALPHA)
+            s.fill(trail_color)
+            surface.blit(s, pos)
+
+        # Corpo Principal (Estilo 3D Isométrico Falso - Cubo Extrudado)
+        pygame.draw.rect(surface, (0, 180, 180), (self.x + 4, self.y - 4, self.size, self.size)) # Sombra
+        pygame.draw.rect(surface, CYAN, (self.x, self.y, self.size, self.size)) # Topo
+        pygame.draw.rect(surface, WHITE, (self.x, self.y, self.size, 4)) # Brilho de borda
+
+class GhostPlayer:
+    """ O clone da sua última vida fazendo exatamente o que você fez """
+    def __init__(self, history):
+        self.history = history
+        self.size = 24
+        self.index = 0
+
+    def update(self):
+        if self.index < len(self.history):
+            self.x, self.y, self.has_item = self.history[self.index]
+            self.index += 1
+            return True
+        return False
+
+    def draw(self, surface):
+        # Fantasma Holográfico Roxo
+        s = pygame.Surface((self.size, self.size), pygame.SRCALPHA)
+        s.fill((188, 19, 254, 100)) # Transparência de holograma
+        surface.blit(s, (self.x, self.y))
+        pygame.draw.rect(surface, PURPLE, (self.x, self.y, self.size, self.size), 2)
+
+class Collectible:
+    def __init__(self):
+        self.radius = 12
+        self.angle = 0
+        self.spawn()
+
+    def spawn(self):
+        self.x = random.randint(100, WIDTH - 100)
+        self.y = random.randint(100, HEIGHT - 100)
+        self.active = True
+
+    def draw(self, surface):
+        if self.active:
+            self.angle += 0.1 # Animação de flutuar/girar
+            pulse_radius = self.radius + int(math.sin(self.angle) * 3)
+            
+            # Aura de Brilho
+            pygame.draw.circle(surface, (150, 150, 0), (self.x, self.y), pulse_radius + 4, 1)
+            # Núcleo
+            pygame.draw.circle(surface, YELLOW, (self.x, self.y), pulse_radius)
+
+class Base:
+    def __init__(self):
+        self.x, self.y = 80, 80
+        self.w, self.h = 90, 90
+
+    def draw(self, surface):
+        # Desenha laboratório Cyberpunk com camadas
+        pygame.draw.rect(surface, (0, 40, 0), (self.x - 5, self.y - 5, self.w + 10, self.h + 10), 0, 10)
+        pygame.draw.rect(surface, GREEN, (self.x, self.y, self.w, self.h), 3, 8)
+        
+        # Sinalizador central
+        pygame.draw.circle(surface, GREEN, (self.x + self.w//2, self.y + self.h//2), 10)
+
+def draw_grid(surface, time_left):
+    """ Desenha um chão de grade sci-fi que deforma com o tempo """
+    grid_size = 50
+    # Se o tempo estiver acabando, o chão pisca em vermelho
+    color = RED if time_left <= 5 and int(time_left * 5) % 2 == 0 else GRID_BLUE
+    
+    for x in range(0, WIDTH, grid_size):
+        pygame.draw.line(surface, color, (x, 0), (x, HEIGHT), 1)
+    for y in range(0, HEIGHT, grid_size):
+        pygame.draw.line(surface, color, (0, y), (WIDTH, y), 1)
+
+# Instâncias Iniciais
+player = Player()
+item = Collectible()
+base = Base()
+ghost = None
+
+time_left = LOOP_TIME
+last_ticks = pygame.time.get_ticks()
+
+# --- LOOP PRINCIPAL DO JOGO ---
+running = True
+screen_shake = 0
+
+while running:
+    # Efeito de tremor de tela apocalíptico
+    render_offset_x = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
+    render_offset_y = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
+
+    display_surface = pygame.Surface((WIDTH, HEIGHT))
+    display_surface.fill(BLACK)
+    
+    # 1. Eventos
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    # 2. Delta Time & Relógio Temporal
+    current_ticks = pygame.time.get_ticks()
+    dt = (current_ticks - last_ticks) / 1000.0
+    last_ticks = current_ticks
+    time_left -= dt
+
+    # Intensifica o tremor da tela nos segundos finais
+    if time_left <= 5:
+        screen_shake = int((5 - time_left) * 2.5)
+    else:
+        screen_shake = 0
+
+    # 3. Inputs e Gravação de Histórico
+    keys = pygame.key.get_pressed()
+    player.move(keys)
+    # Grava a posição atual e se tinha o item para o fantasma usar depois
+    current_run_history.append((player.x, player.y, player.has_item))
+
+    # 4. Atualizar o Fantasma (se ele existir)
+    if ghost:
+        ghost.update()
+
+    # 5. Colisão: Jogador -> Item
+    if item.active and not player.has_item:
+        px, py = player.x + player.size//2, player.y + player.size//2
+        dist = math.hypot(px - item.x, py - item.y)
+        if dist < (player.size//2 + item.radius):
+            item.active = False
+            player.has_item = True
+
+    # 6. Colisão: Jogador -> Base de Entrega
+    if player.has_item:
+        if (base.x < player.x < base.x + base.w) and (base.y < player.y < base.y + base.h):
+            total_deliveries += 1
+            persistent_credits += 100
+            player.has_item = False
+            item.spawn()
+            # Upgrade imediato de velocidade na corrida atual
+            player.speed += 0.5 
+
+    # 7. O COLAPSO DO LOOP (Fim dos 30 segundos)
+    if time_left <= 0:
+        time_left = LOOP_TIME
+        current_loop += 1
+        
+        # O pulo do gato: A corrida atual vira o fantasma da próxima
+        past_run_history = list(current_run_history)
+        current_run_history = []
+        ghost = GhostPlayer(past_run_history)
+        
+        # Reseta o mundo, MAS mantém os upgrades e os créditos!
+        player.reset_pos()
+        item.spawn()
+
+    # --- RENDERIZAÇÃO DOS ELEMENTOS ---
+    draw_grid(display_surface, time_left)
+    base.draw(display_surface)
+    item.draw(display_surface)
+    
+    if ghost:
+        ghost.draw(display_surface)
+        
+    player.draw(display_surface)
+
+    # --- INTERFACE GRÁFICA (UI CYBERPUNK) ---
+    # Alarme visual de tempo esgotando
+    timer_color = RED if time_left <= 5 and int(time_left * 10) % 2 == 0 else WHITE
+    
+    timer_box = font.render(f"CHRONOS TIMER: {max(0.0, time_left):.2f}s", True, timer_color)
+    loop_box = font.render(f"LOOP ATUAL: #{current_loop}", True, PURPLE)
+    score_box = font.render(f"ENTREGAS TOTAIS: {total_deliveries}", True, GREEN)
+    money_box = font.render(f"CHRONOS CREDITS: ${persistent_credits}", True, YELLOW)
+
+    display_surface.blit(timer_box, (WIDTH - 320, 20))
+    display_surface.blit(loop_box, (WIDTH - 320, 50))
+    display_surface.blit(score_box, (20, 20))
+    display_surface.blit(money_box, (20, 50))
+
+    if player.has_item:
+        alert_text = font.render("⚠️ MATÉRIA ESTÁVEL CAPTURADA! LEVE PARA A BASE VERDE! ⚠️", True, YELLOW)
+        display_surface.blit(alert_text, (WIDTH//2 - alert_text.get_width()//2, HEIGHT - 50))
+    if ghost:
+        ghost_text = font.render("⚡ ANOMALIA TEMPORAL DETECTADA: SEU FANTASMA ESTÁ NA PISTA!", True, PURPLE)
+        display_surface.blit(ghost_text, (WIDTH//2 - ghost_text.get_width()//2, HEIGHT - 80))
+
+    # Desenha tudo na tela aplicando o tremor de terra (Screen Shake)
+    screen.blit(display_surface, (render_offset_x, render_offset_y))
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()
+sys.exit()
