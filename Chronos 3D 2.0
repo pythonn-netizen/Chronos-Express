@@ -10,10 +10,13 @@ app = Ursina()
 camera.clip_plane_far = 600  
 scene.fog_density = 0        
 
-# Configurações de janela
+# 🛠️ CONFIGURAÇÕES DE JANELA UNIVERSAIS (Anti-corte para Linux e Windows)
 window.fps_counter.enabled = True
-window.title = "Chronos Express 3D - Unchained Edition"
-window.borderless = False
+window.title = "Chronos Express 3D - Multiplatform Edition"
+window.fullscreen = False       # Garante que não vai travar resoluções nativas
+window.borderless = False       # Mantém a janela móvel com barra de título
+window.size = (1280, 720)       # Força uma resolução padrão HD estável em qualquer OS
+window.center_on_screen()       # Centraliza automaticamente na inicialização
 
 # --- VARIÁVEIS GLOBAIS DE JOGO & ECONOMIA ---
 base_loop_time = 30.0
@@ -77,11 +80,10 @@ for i in range(15):
         t.collider.is_trigger = True
         traps.append(t)
 
-# --- 🛠️ DRONES COM IA TOTALMENTE ALEATÓRIA (ROUTING DINÂMICO) ---
+# --- DRONES COM IA ALEATÓRIA (ROUTING DINÂMICO) ---
 drones = []
 for i in range(6):
     d = Entity(model='cube', scale=(2.5, 2.5, 2.5), color=color.orange, position=(random.randint(-120, 120), 3, random.randint(-120, 120)), collider='box')
-    # Cada drone agora escolhe um ponto de destino aleatório inicial no mapa gigante
     d.target_x = random.randint(-135, 135)
     d.target_z = random.randint(-135, 135)
     drones.append(d)
@@ -183,10 +185,10 @@ def update():
     look_horizontal = held_keys['l'] - held_keys['j']
     player.rotation_y += look_horizontal * 140.0 * time.dt
     
-    # 🛠️ AJUSTE: CÂMERA VERTICAL TOTALMENTE LIVRE (Sem limites artificiais travando)
+    # CÂMERA VERTICAL TOTALMENTE LIVRE 
     look_vertical = held_keys['k'] - held_keys['i']
     camera_container.rotation_x += look_vertical * 140.0 * time.dt
-    camera_container.rotation_x = clamp(camera_container.rotation_x, -85, 85) # Permite olhar quase reto para cima ou chão
+    camera_container.rotation_x = clamp(camera_container.rotation_x, -85, 85) 
 
     # CÁLCULO DE VELOCIDADE ATUAL
     current_speed = player_speed
@@ -208,21 +210,19 @@ def update():
     if move_direction.length() > 0:
         move_direction = move_direction.normalized()
         
-        # 🛠️ AJUSTE DE COLISÃO DINÂMICA: O raio cresce de acordo com a velocidade atual do player
-        # Isso impede que o Dash passe por dentro de paredes por causa da alta velocidade
+        # COLISÃO DINÂMICA: Ajusta o raio de detecção baseado na velocidade atual do player
         ray_distance = max(2.0, (current_speed * time.dt) + 1.2)
         
         hit_info = raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_direction, distance=ray_distance, ignore=(player,))
         if not hit_info.hit:
             player.position += move_direction * current_speed * time.dt
 
-    # 🛠️ AJUSTE DA INTELIGÊNCIA DOS DRONES (MOVIMENTO SEMPRE IMPREVISÍVEL)
+    # INTELIGÊNCIA DOS DRONES (MOVIMENTO IMPREVISÍVEL)
     for d in drones:
         target_pos = Vec3(d.target_x, d.y, d.target_z)
         d.look_at(target_pos)
-        d.position += d.forward * 20 * time.dt  # Velocidade dos drones constante
+        d.position += d.forward * 20 * time.dt  
         
-        # Se o drone chegou perto do seu objetivo aleatório atual, ele calcula uma nova rota imediatamente
         if distance(d.position, target_pos) < 5.0:
             d.target_x = random.randint(-135, 135)
             d.target_z = random.randint(-135, 135)
@@ -241,7 +241,7 @@ def update():
             is_jumping = False
             vertical_velocity = 0
 
-    # CÂMERA DINÂMICA COMPORTADA
+    # CÂMERA DINÂMICA COMPORTADA (ANTI-PAREDE)
     desired_camera_pos = player.position + (player.forward * CAMERA_TARGET_DISTANCE) + Vec3(0, CAMERA_TARGET_HEIGHT, 0)
     camera_hit_info = raycast(origin=player.position + Vec3(0, 1, 0), direction=desired_camera_pos - (player.position + Vec3(0, 1, 0)), distance=distance(player.position + Vec3(0, 1, 0), desired_camera_pos), ignore=(player, camera,))
     if camera_hit_info.hit:
