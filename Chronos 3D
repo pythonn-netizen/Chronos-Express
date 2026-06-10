@@ -1,0 +1,180 @@
+from ursina import *
+import random
+import math
+import sys
+
+# Inicializa o motor do jogo 3D
+app = Ursina()
+
+# Configurações de janela
+window.fps_counter.enabled = True
+window.title = "Chronos Express 3D - Universal Key Edition"
+window.borderless = False
+
+# --- CONFIGURAÇÕES DO LOOP TEMPORAL ---
+LOOP_TIME = 30.0
+time_left = LOOP_TIME
+deliveries_made = 0
+has_item = False
+elapsed_time = 0.0
+
+# --- MAPA E CENÁRIO 3D ---
+floor = Entity(
+    model='cube', 
+    scale=(100, 0.1, 100), 
+    y=0,
+    color=color.black, 
+    texture='white_cube', 
+    texture_scale=(50, 50),
+    collider='box'
+)
+
+# Paredes
+Entity(model='cube', scale=(1, 20, 100), x=-50, y=10, color=color.clear, collider='box')
+Entity(model='cube', scale=(1, 20, 100), x=50, y=10, color=color.clear, collider='box')
+Entity(model='cube', scale=(100, 20, 1), z=-50, y=10, color=color.clear, collider='box')
+Entity(model='cube', scale=(100, 20, 1), z=50, y=10, color=color.clear, collider='box')
+
+# Obstáculos/Prédios
+buildings = []
+neon_colors = [color.magenta, color.cyan, color.violet, color.blue]
+
+for i in range(15):
+    bx = random.randint(-40, 40)
+    bz = random.randint(-40, 40)
+    if abs(bx) > 10 or abs(bz) > 10:
+        b = Entity(
+            model='cube',
+            position=(bx, 5, bz),
+            scale=(random.randint(5, 12), random.randint(10, 25), random.randint(5, 12)),
+            color=random.choice(neon_colors),
+            collider='box'
+        )
+        buildings.append(b)
+
+# --- ENTIDADES ---
+base_delivery = Entity(
+    model='cube',
+    position=(-30, 2, 30),
+    scale=(8, 4, 8),
+    color=color.green,
+    collider='box'
+)
+base_light = Entity(model='sphere', position=(-30, 5, 30), scale=2, color=color.lime)
+
+item = Entity(
+    model='sphere',
+    position=(30, 1.5, -30),
+    scale=1.5,
+    color=color.yellow,
+    collider='sphere'
+)
+
+# --- JOGADOR (Agora visível em azul para te dar orientação) ---
+player = Entity(model='cube', color=color.blue, position=(0, 1, 0), scale=(1.2, 2, 1.2), collider='box')
+
+# Câmera acoplada atrás/dentro do jogador
+camera.parent = player
+camera.position = (0, 1.5, -0.5) # Posicionada na altura dos olhos, ligeiramente recuada
+camera.rotation = (0, 0, 0)
+
+# Mouse livre para não dar problemas
+mouse.locked = False
+mouse.visible = True
+
+# Velocidades calibradas para as novas teclas
+ROTATION_SPEED = 120.0  
+player_speed = 12
+
+# --- INTERFACE DO USUÁRIO (UI) ---
+timer_text = Text(text='', position=(0.5, 0.4), scale=2, origin=(0,0), color=color.white)
+score_text = Text(text=f'Entregas: {deliveries_made}', position=(-0.7, 0.4), scale=1.5, color=color.green)
+status_text = Text(text='BUSQUE A BATERIA AMARELA!', position=(0, -0.4), scale=1.5, origin=(0,0), color=color.yellow)
+help_text = Text(text='[WASD] Mover | [I K J L] Olhar ao Redor | [ESC] Sair', position=(-0.8, -0.45), scale=1.2, color=color.light_gray)
+
+def respawn_item():
+    item.x = random.randint(-40, 40)
+    item.z = random.randint(-40, 40)
+    item.y = 1.5
+    item.enable() 
+
+def input(key):
+    if key == 'escape':
+        sys.exit()
+
+# --- LOOP DE ATUALIZAÇÃO ---
+def update():
+    global time_left, deliveries_made, has_item, elapsed_time, player_speed
+    
+    time_left -= time.dt 
+    elapsed_time += time.dt
+    
+    # 🛠️ SISTEMA DE CÂMERA UNIVERSAL (Mapeado nas letras I, K, J, L)
+    # L (Direita) menos J (Esquerda) gira o personagem no eixo horizontal (Olhar para os lados)
+    look_horizontal = held_keys['l'] - held_keys['j']
+    player.rotation_y += look_horizontal * ROTATION_SPEED * time.dt
+    
+    # I (Cima) menos K (Baixo) inclina a visão no eixo vertical (Olhar para cima/baixo)
+    look_vertical = held_keys['i'] - held_keys['k']
+    camera.rotation_x -= look_vertical * ROTATION_SPEED * time.dt
+    camera.rotation_x = clamp(camera.rotation_x, -60, 60)
+
+    # MOVIMENTAÇÃO DO JOGADOR (WASD)
+    direction = Vec3(
+        self_forward := (held_keys['w'] - held_keys['s']),
+        0,
+        self_right := (held_keys['d'] - held_keys['a'])
+    ).normalized()
+
+    move_direction = player.forward * self_forward + player.right * self_right
+    if move_direction.length() > 0:
+        move_direction = move_direction.normalized()
+        player.position += move_direction * player_speed * time.dt
+
+    # Animação da Bateria
+    if item.enabled:
+        item.rotation_y += 45 * time.dt
+        item.y = 1.5 + math.sin(elapsed_time * 5) * 0.3
+
+    # Interface Dinâmica
+    if time_left <= 5:
+        timer_text.color = color.red
+        timer_text.scale = 2 + math.sin(elapsed_time * 20) * 0.2
+    else:
+        timer_text.color = color.white
+        timer_text.scale = 2
+
+    timer_text.text = f"{max(0.0, time_left):.1f}s"
+    
+    # Colisões
+    if not has_item and item.enabled:
+        if distance(player.position, item.position) < 3.0:
+            has_item = True
+            item.disable() 
+            status_text.text = "BATERIA CAPTURADA! VÁ ATÉ A BASE VERDE!"
+            status_text.color = color.lime
+
+    if has_item:
+        if distance(player.position, base_delivery.position) < 6.0:
+            deliveries_made += 1
+            score_text.text = f'Entregas: {deliveries_made}'
+            has_item = False
+            status_text.text = "ENTREGA FEITA! ADIANDO O APOCALIPSE..."
+            status_text.color = color.yellow
+            respawn_item()
+            player_speed += 1.5 
+
+    # O RESET DO LOOP
+    if time_left <= 0:
+        time_left = LOOP_TIME
+        has_item = False
+        status_text.text = "O MUNDO EXPLODIU! REINICIANDO TIMELINE..."
+        status_text.color = color.red
+        
+        player.position = (0, 1, 0)
+        player.rotation = (0, 0, 0)
+        camera.rotation = (0, 0, 0)
+        
+        respawn_item()
+
+app.run()
