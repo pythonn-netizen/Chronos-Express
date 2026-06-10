@@ -1,0 +1,295 @@
+from ursina import *
+import random
+import math
+import sys
+
+# Inicializa o motor do jogo 3D
+app = Ursina()
+
+# Correção de renderização para mapas de escala massiva
+camera.clip_plane_far = 600  
+scene.fog_density = 0        
+
+# Configurações de janela
+window.fps_counter.enabled = True
+window.title = "Chronos Express 3D - Unchained Edition"
+window.borderless = False
+
+# --- VARIÁVEIS GLOBAIS DE JOGO & ECONOMIA ---
+base_loop_time = 30.0
+time_left = base_loop_time
+deliveries_made = 0
+time_cores = 0  
+has_item = False
+elapsed_time = 0.0
+in_shop = False
+
+# Atributos do jogador (Upgradables)
+player_speed = 35.0
+jump_height = 14.0
+dash_cooldown = 0.0
+
+# Níveis dos Upgrades
+speed_lvl = 1
+jump_lvl = 1
+time_lvl = 1
+
+# --- MAPA GIGANTE (300x300) ---
+floor = Entity(
+    model='cube', 
+    scale=(300, 0.1, 300), 
+    y=0,
+    color=color.black, 
+    texture='white_cube', 
+    texture_scale=(150, 150),
+    collider='box'
+)
+
+# Barreiras das bordas do mapa gigante (Paredes externas reforçadas)
+Entity(model='cube', scale=(5, 50, 300), x=-150, y=1, color=color.dark_gray, collider='box')
+Entity(model='cube', scale=(5, 50, 300), x=150, y=1, color=color.dark_gray, collider='box')
+Entity(model='cube', scale=(300, 50, 5), z=-150, y=1, color=color.dark_gray, collider='box')
+Entity(model='cube', scale=(300, 50, 5), z=150, y=1, color=color.dark_gray, collider='box')
+
+# Geração de 80 Prédios Neon Variados
+buildings = []
+neon_colors = [color.magenta, color.cyan, color.violet, color.blue]
+for i in range(80):
+    bx = random.randint(-135, 135)
+    bz = random.randint(-135, 135)
+    if distance((bx, 0, bz), (-100, 0, 100)) > 25 and (abs(bx) > 20 or abs(bz) > 20):
+        b = Entity(
+            model='cube',
+            position=(bx, random.randint(8, 25), bz),
+            scale=(random.randint(8, 16), random.randint(15, 45), random.randint(8, 16)),
+            color=random.choice(neon_colors),
+            collider='box'
+        )
+        buildings.append(b)
+
+# --- ARMADILHAS (ZONAS DE LENTIDÃO) ---
+traps = []
+for i in range(15):
+    tx = random.randint(-130, 130)
+    tz = random.randint(-130, 130)
+    if distance((tx, 0, tz), (0,0,0)) > 20:
+        t = Entity(model='cube', scale=(12, 0.2, 12), position=(tx, 0.05, tz), color=color.red, collider='box')
+        t.collider.is_trigger = True
+        traps.append(t)
+
+# --- 🛠️ DRONES COM IA TOTALMENTE ALEATÓRIA (ROUTING DINÂMICO) ---
+drones = []
+for i in range(6):
+    d = Entity(model='cube', scale=(2.5, 2.5, 2.5), color=color.orange, position=(random.randint(-120, 120), 3, random.randint(-120, 120)), collider='box')
+    # Cada drone agora escolhe um ponto de destino aleatório inicial no mapa gigante
+    d.target_x = random.randint(-135, 135)
+    d.target_z = random.randint(-135, 135)
+    drones.append(d)
+
+# --- OBJETIVOS (BASE E BATERIA) ---
+base_delivery = Entity(model='cube', position=(-100, 3, 100), scale=(12, 6, 12), color=color.green, collider='box')
+base_light = Entity(model='sphere', position=(-100, 8, 100), scale=3, color=color.lime)
+item = Entity(model='sphere', position=(100, 1.5, -100), scale=2, color=color.yellow, collider='sphere')
+
+# --- PERSONAGEM ---
+player = Entity(model='cube', color=color.cyan, position=(0, 1.5, 0), scale=(1.5, 3, 1.5), collider='box')
+Entity(parent=player, model='cube', color=color.white, position=(0, 0.4, 0.4), scale=(0.8, 0.2, 0.2))
+
+# Câmera de Ação Livre
+camera_container = Entity(parent=player)
+camera.parent = camera_container
+camera.position = (0, 10, -25) 
+camera.rotation_x = 22       
+
+mouse.locked = False
+mouse.visible = True
+
+is_jumping = False
+vertical_velocity = 0
+CAMERA_TARGET_DISTANCE = -25
+CAMERA_TARGET_HEIGHT = 10
+
+# --- INTERFACE ---
+timer_text = Text(text='', position=(0.5, 0.4), scale=2, origin=(0,0), color=color.white)
+score_text = Text(text='', position=(-0.7, 0.4), scale=1.5, color=color.green)
+status_text = Text(text='BUSQUE A BATERIA AMARELA NO MAPA GIGANTE!', position=(0, -0.35), scale=1.5, origin=(0,0), color=color.yellow)
+help_text = Text(text='[WASD] Mover | [I K J L] Câmera Livre | [ESPAÇO] Pular | [SHIFT] Dash | [ESC] Sair', position=(-0.8, -0.45), scale=1.1, color=color.light_gray)
+
+# Painel da Loja
+shop_panel = Entity(enabled=False, parent=camera.ui, model='quad', scale=(0.7, 0.6), color=color.black90, position=(0,0))
+shop_title = Text(parent=shop_panel, text="--- TIMELINE SHOP ---", scale=2.5, origin=(0,-2), color=color.cyan)
+shop_cores_text = Text(parent=shop_panel, text="", scale=1.8, origin=(0,-0.5), color=color.yellow)
+shop_help = Text(parent=shop_panel, text="Pressione [1] +Velocidade  |  [2] +Super Pulo  |  [3] +Tempo Loop\nPressione [ENTER] para Voltar ao Jogo", scale=1.2, origin=(0, 3), color=color.white)
+
+def respawn_item():
+    valid_spawn = False
+    while not valid_spawn:
+        rx = random.randint(-140, 140)
+        rz = random.randint(-140, 140)
+        if distance((rx, 0, rz), base_delivery.position) > 50 and distance((rx, 0, rz), (0, 0, 0)) > 30:
+            item.x = rx
+            item.z = rz
+            valid_spawn = True
+    item.y = 1.5
+    item.enable() 
+
+respawn_item()
+
+def input(key):
+    global is_jumping, vertical_velocity, in_shop, time_left, base_loop_time, player_speed, jump_height, time_cores, speed_lvl, jump_lvl, time_lvl
+    
+    if key == 'escape':
+        sys.exit()
+        
+    if in_shop:
+        if key == '1' and time_cores >= 1:
+            time_cores -= 1
+            player_speed += 5.0
+            speed_lvl += 1
+        elif key == '2' and time_cores >= 1:
+            time_cores -= 1
+            jump_height += 3.0
+            jump_lvl += 1
+        elif key == '3' and time_cores >= 1:
+            time_cores -= 1
+            base_loop_time += 5.0
+            time_lvl += 1
+        elif key == 'enter':
+            in_shop = False
+            shop_panel.disable()
+            time_left = base_loop_time
+            respawn_item()
+        return
+
+    if key == 'space' and not is_jumping:
+        is_jumping = True
+        vertical_velocity = jump_height
+
+def update():
+    global time_left, deliveries_made, time_cores, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity, in_shop, dash_cooldown
+    
+    if in_shop:
+        shop_cores_text.text = f"Seus Núcleos Temporais: {time_cores}\n\n[1] Velocidade (Lvl {speed_lvl})\n[2] Altura Pulo (Lvl {jump_lvl})\n[3] Tempo do Loop (Lvl {time_lvl})"
+        return
+
+    time_left -= time.dt 
+    elapsed_time += time.dt
+    if dash_cooldown > 0:
+        dash_cooldown -= time.dt
+
+    score_text.text = f'Entregas: {deliveries_made}\nNúcleos: {time_cores}'
+
+    # ROTAÇÃO HORIZONTAL DA CÂMERA
+    look_horizontal = held_keys['l'] - held_keys['j']
+    player.rotation_y += look_horizontal * 140.0 * time.dt
+    
+    # 🛠️ AJUSTE: CÂMERA VERTICAL TOTALMENTE LIVRE (Sem limites artificiais travando)
+    look_vertical = held_keys['k'] - held_keys['i']
+    camera_container.rotation_x += look_vertical * 140.0 * time.dt
+    camera_container.rotation_x = clamp(camera_container.rotation_x, -85, 85) # Permite olhar quase reto para cima ou chão
+
+    # CÁLCULO DE VELOCIDADE ATUAL
+    current_speed = player_speed
+    for t in traps:
+        if distance(player.position, t.position) < 6.0 and player.y <= 1.5:
+            current_speed = player_speed * 0.4  
+            status_text.text = "ZONA DE LENTIDÃO! PULE PARA SAIR!"
+            status_text.color = color.red
+
+    if held_keys['left shift'] and dash_cooldown <= 0:
+        current_speed *= 2.5
+        dash_cooldown = 1.5  
+
+    # MOVIMENTAÇÃO DO JOGADOR
+    self_forward = held_keys['w'] - held_keys['s']
+    self_right = held_keys['d'] - held_keys['a']
+    move_direction = player.forward * self_forward + player.right * self_right
+    
+    if move_direction.length() > 0:
+        move_direction = move_direction.normalized()
+        
+        # 🛠️ AJUSTE DE COLISÃO DINÂMICA: O raio cresce de acordo com a velocidade atual do player
+        # Isso impede que o Dash passe por dentro de paredes por causa da alta velocidade
+        ray_distance = max(2.0, (current_speed * time.dt) + 1.2)
+        
+        hit_info = raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_direction, distance=ray_distance, ignore=(player,))
+        if not hit_info.hit:
+            player.position += move_direction * current_speed * time.dt
+
+    # 🛠️ AJUSTE DA INTELIGÊNCIA DOS DRONES (MOVIMENTO SEMPRE IMPREVISÍVEL)
+    for d in drones:
+        target_pos = Vec3(d.target_x, d.y, d.target_z)
+        d.look_at(target_pos)
+        d.position += d.forward * 20 * time.dt  # Velocidade dos drones constante
+        
+        # Se o drone chegou perto do seu objetivo aleatório atual, ele calcula uma nova rota imediatamente
+        if distance(d.position, target_pos) < 5.0:
+            d.target_x = random.randint(-135, 135)
+            d.target_z = random.randint(-135, 135)
+            
+        if distance(player.position, d.position) < 3.5:
+            time_left -= 6 * time.dt  
+            status_text.text = "DRONE TE CAÇOU! -6 SEGUNDOS!"
+            status_text.color = color.orange
+
+    # FÍSICA DO PULO
+    if is_jumping:
+        player.y += vertical_velocity * time.dt
+        vertical_velocity -= 38 * time.dt 
+        if player.y <= 1.5:
+            player.y = 1.5
+            is_jumping = False
+            vertical_velocity = 0
+
+    # CÂMERA DINÂMICA COMPORTADA
+    desired_camera_pos = player.position + (player.forward * CAMERA_TARGET_DISTANCE) + Vec3(0, CAMERA_TARGET_HEIGHT, 0)
+    camera_hit_info = raycast(origin=player.position + Vec3(0, 1, 0), direction=desired_camera_pos - (player.position + Vec3(0, 1, 0)), distance=distance(player.position + Vec3(0, 1, 0), desired_camera_pos), ignore=(player, camera,))
+    if camera_hit_info.hit:
+        camera.position = (0, lerp(camera.position.y, CAMERA_TARGET_HEIGHT / 2, time.dt * 15), lerp(camera.position.z, CAMERA_TARGET_DISTANCE / 2, time.dt * 15))
+    else:
+        camera.position = (0, lerp(camera.position.y, CAMERA_TARGET_HEIGHT, time.dt * 15), lerp(camera.position.z, CAMERA_TARGET_DISTANCE, time.dt * 15))
+
+    # ANIMAÇÃO DA BATERIA
+    if item.enabled:
+        item.rotation_y += 45 * time.dt
+        item.y = 1.5 + math.sin(elapsed_time * 5) * 0.3
+
+    # CRONÔMETRO
+    if time_left <= 5:
+        timer_text.color = color.red
+        timer_text.scale = 2 + math.sin(elapsed_time * 20) * 0.2
+    else:
+        timer_text.color = color.white
+        timer_text.scale = 2
+    timer_text.text = f"{max(0.0, time_left):.1f}s"
+    
+    # COLETA
+    if not has_item and item.enabled:
+        if distance(player.position, item.position) < 4.5:
+            has_item = True
+            item.disable() 
+            status_text.text = "BATERIA COLETADA! LEVE ATÉ A BASE VERDE!"
+            status_text.color = color.lime
+
+    # ENTREGA
+    if has_item:
+        if distance(player.position, base_delivery.position) < 9.0:
+            deliveries_made += 1
+            time_cores += 1  
+            has_item = False
+            status_text.text = "ENTREGA FEITA! +1 NÚCLEO TEMPORAL ADQUIRIDO!"
+            status_text.color = color.yellow
+            respawn_item()
+
+    # RESET / LOJA
+    if time_left <= 0:
+        has_item = False
+        player.position = (0, 1.5, 0)
+        player.rotation = (0, 0, 0)
+        camera.position = (0, CAMERA_TARGET_HEIGHT, CAMERA_TARGET_DISTANCE)
+        camera_container.rotation_x = 0
+        
+        in_shop = True
+        shop_panel.enable()
+
+app.run()
