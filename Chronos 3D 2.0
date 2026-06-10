@@ -1,14 +1,14 @@
 import sys
 
-# 1. FORÇAR A PROPORÇÃO EXATA DO SEU MONITOR (5:4 - 1280x1024)
+# 1. TRANCAR O MOTOR EM TELA CHEIA REAL NA RESOLUÇÃO DO SEU MONITOR
 from panda3d.core import loadPrcFileData
 loadPrcFileData("", "win-size 1280 1024")
-loadPrcFileData("", "fullscreen false")
-loadPrcFileData("", "undecorated false")
-loadPrcFileData("", "window-title Chronos Express 3D - Monitor Quadrado Fix")
+loadPrcFileData("", "fullscreen true")  # Força tela cheia total para o Windows não bugar a janela
+loadPrcFileData("", "undecorated true")
 loadPrcFileData("", "framebuffer-hardware true")
 loadPrcFileData("", "framebuffer-software false")
 
+# Desativa completamente o ajuste de escala do Windows 10 que causa telas pretas
 if sys.platform == "win32":
     try:
         import ctypes
@@ -20,14 +20,13 @@ from ursina import *
 import random
 import math
 
-# Inicializa o motor com a proporção do seu monitor
+# Inicializa o motor com tela cheia ativada
 app = Ursina()
 
-# Trava a janela no tamanho correto para não cortar nada
+# Configurações explícitas de tela cheia dentro da Ursina
 window.size = (1280, 1024)
-window.fullscreen = False
-window.borderless = False
-window.center_on_screen()
+window.fullscreen = True
+window.borderless = True
 
 # --- VARIÁVEIS DE JOGO & ECONOMIA ---
 base_loop_time = 30.0
@@ -47,7 +46,7 @@ speed_lvl = 1
 jump_lvl = 1
 time_lvl = 1
 
-# --- MAPA ---
+# --- MAPA SEGURO ---
 floor = Entity(model='cube', scale=(300, 0.1, 300), y=0, color=color.dark_gray, collider='box')
 
 # Barreiras externas
@@ -92,16 +91,16 @@ Entity(parent=player, model='cube', color=color.white, position=(0, 0.4, 0.4), s
 Sky()
 DirectionalLight(y=2, z=-3, x=1).look_at(Vec3(0,0,0))
 
-# Câmera Ajustada para Telas Quadradas
+# Câmera Ajustada para Proporção Quadrada (Afastada para dar visão ideal)
 camera.parent = scene
-camera.position = (0, 18, -28) # Afastada um pouco mais para compensar a largura menor
+camera.position = (0, 20, -32)
 
 is_jumping, vertical_velocity = False, 0
 
-# --- INTERFACE AJUSTADA PARA PROPORÇÃO 5:4 (TRAVADA NO CENTRO UTILIZÁVEL) ---
-timer_text = Text(parent=camera.ui, text='', position=(0.5, 0.4), scale=2.5, color=color.red) 
-score_text = Text(parent=camera.ui, text='', position=(-0.6, 0.4), scale=1.8, color=color.green) 
-status_text = Text(parent=camera.ui, text='CARREGANDO MUNDO...', position=(-0.3, 0.3), scale=1.6, color=color.yellow) 
+# --- INTERFACE AJUSTADA PARA MONITOR 5:4 ---
+timer_text = Text(parent=camera.ui, text='', position=(0.45, 0.38), scale=2.5, color=color.red) 
+score_text = Text(parent=camera.ui, text='', position=(-0.55, 0.38), scale=1.8, color=color.green) 
+status_text = Text(parent=camera.ui, text='CARREGANDO MUNDO...', position=(-0.3, 0.28), scale=1.6, color=color.yellow) 
 help_text = Text(parent=camera.ui, text='[WASD / Setas] Mover | [J L] Câmera | [ESPAÇO] Pular | [SHIFT] Dash', position=(-0.4, -0.4), scale=1.1, color=color.light_gray) 
 
 # Painel da Loja
@@ -125,6 +124,7 @@ respawn_item()
 def input(key):
     global is_jumping, vertical_velocity, in_shop, time_left, base_loop_time, player_speed, jump_height, time_cores, speed_lvl, jump_lvl, time_lvl
     
+    # ESCAPE fecha o jogo instantaneamente se precisar sair da Tela Cheia
     if key == 'escape': sys.exit()
     
     if in_shop:
@@ -142,7 +142,7 @@ startup_buffer = 0.5
 def update():
     global time_left, deliveries_made, time_cores, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity, in_shop, dash_cooldown, startup_buffer
     
-    camera.position = player.position - player.forward * 28 + Vec3(0, 14, 0)
+    camera.position = player.position - player.forward * 32 + Vec3(0, 15, 0)
     camera.look_at(player.position + Vec3(0, 2, 0))
 
     if startup_buffer > 0:
@@ -175,7 +175,7 @@ def update():
     move_sideways = (held_keys['d'] - held_keys['a'])
     
     current_speed = player_speed
-    status_text.text = 'BUSQUE A BATERIA AMARELA NO MAPA!'
+    status_text.text = 'BUSQUE A BATERIA AMARELA NO MAPA GIGANTE!'
     status_text.color = color.yellow
     
     for t in traps:
@@ -216,7 +216,7 @@ def update():
             is_jumping = False
             vertical_velocity = 0
     
-    # Bateria
+    # Item
     if item.enabled: 
         item.rotation_y += 45 * dt
         item.y = 1.5 + math.sin(elapsed_time * 5) * 0.3
@@ -230,10 +230,10 @@ def update():
         timer_text.scale = 2.5
     timer_text.text = f"{max(0.0, time_left):.1f}s"
     
-    # Coleta
+    # Coleta e Entrega
     if not has_item and item.enabled and distance(player.position, item.position) < 4.5: 
         has_item = True
-        status_text.text = "LEVE ATÉ A BASE VERDE!"
+        status_text.text = "BATERIA COLETADA! VÁ PARA A BASE VERDE!"
         status_text.color = color.lime
         item.disable()
         
@@ -241,7 +241,7 @@ def update():
         deliveries_made += 1
         time_cores += 1
         has_item = False
-        status_text.text = "+1 NÚCLEO TEMPORAL!"
+        status_text.text = "ENTREGA FEITA!"
         status_text.color = color.yellow
         respawn_item()
         
