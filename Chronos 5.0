@@ -1,0 +1,442 @@
+import pygame
+import random
+import sys
+import math
+
+pygame.init()
+
+# Configurações da Tela
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Chronos Express v5.3")
+clock = pygame.time.Clock()
+
+# Cores Cyberpunk / Neon
+BLACK = (10, 10, 15)
+WHITE = (240, 240, 240)
+CYAN = (0, 255, 255)       # Jogador Normal
+YELLOW = (255, 255, 0)     # Bateria / Alerta
+GREEN = (0, 255, 120)      # Máquina do Tempo / Esteira
+RED = (255, 50, 70)        # Inimigo Comum (Quicador)
+ORANGE = (255, 130, 0)     # Inimigo Perseguidor (Inteligente)
+GRAY = (50, 50, 65)        # Obstáculos
+BLUE = (50, 150, 255)      # Escudo / Dash
+PURPLE = (140, 20, 255)    # Fenda de Lentidão
+DARK_GREEN = (0, 60, 30)   
+DARK_PURPLE = (35, 10, 60) 
+
+# Fontes
+font_sm = pygame.font.SysFont("Arial", 20, bold=True)
+font_md = pygame.font.SysFont("Arial", 28, bold=True)
+font_lg = pygame.font.SysFont("Arial", 55, bold=True)
+
+# Estados do Jogo
+STATE_MENU = "MENU"
+STATE_PLAYING = "PLAYING"
+STATE_UPGRADE = "UPGRADE"
+STATE_GAME_OVER = "GAME_OVER"
+current_state = STATE_MENU
+
+# Variáveis Globais
+LOOP_TIME = 30.0
+time_left = LOOP_TIME
+deliveries_made = 0
+
+class Player:
+    def __init__(self):
+        self.size = 25
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+        self.reset_pos()
+        
+        # Atributos Melhoráveis
+        self.base_speed = 4.5
+        self.dash_cooldown_max = 1.5
+        self.shield_duration_max = 5.0
+        
+        # Estados dinâmicos
+        self.speed = self.base_speed
+        self.has_item = False
+        self.shield_timer = 0.0 
+        self.dash_timer = 0.0
+        self.dash_cooldown = 0.0
+        self.dash_speed_multiplier = 3.5
+        self.is_dashing = False
+        self.last_move_dir = [0, 0]
+        self.invincible_timer = 0.0 
+
+    def reset_pos(self):
+        self.rect.x = WIDTH // 2
+        self.rect.y = HEIGHT // 2
+        self.shield_timer = 0.0
+        self.dash_timer = 0.0
+        self.dash_cooldown = 0.0
+        self.is_dashing = False
+        self.invincible_timer = 0.0
+
+    def trigger_dash(self):
+        if self.dash_cooldown <= 0 and (self.last_move_dir[0] != 0 or self.last_move_dir[1] != 0):
+            self.is_dashing = True
+            self.dash_timer = 0.15 
+            self.dash_cooldown = self.dash_cooldown_max
+
+    def move(self, keys, obstacles, speed_zones, slow_zones, dt):
+        old_x, old_y = self.rect.x, self.rect.y
+        
+        if self.dash_cooldown > 0: self.dash_cooldown -= dt
+        if self.invincible_timer > 0: self.invincible_timer -= dt
+        if self.dash_timer > 0:
+            self.dash_timer -= dt
+            if self.dash_timer <= 0: self.is_dashing = False
+
+        current_speed = self.speed
+        if self.is_dashing:
+            current_speed = self.speed * self.dash_speed_multiplier
+        else:
+            if any(self.rect.colliderect(zone) for zone in speed_zones):
+                current_speed = self.speed * 1.6
+            elif any(self.rect.colliderect(zone) for zone in slow_zones):
+                current_speed = self.speed * 0.5
+
+        move_x, move_y = 0, 0
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]: move_x = -1
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: move_x = 1
+        if keys[pygame.K_UP] or keys[pygame.K_w]: move_y = -1
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]: move_y = 1
+
+        if move_x != 0 or move_y != 0:
+            length = math.sqrt(move_x**2 + move_y**2)
+            self.last_move_dir = [move_x / length, move_y / length]
+
+        dx = self.last_move_dir[0] * current_speed if self.is_dashing else move_x * current_speed
+        self.rect.x += dx
+        for obs in obstacles:
+            if self.rect.colliderect(obs): self.rect.x = old_x
+
+        dy = self.last_move_dir[1] * current_speed if self.is_dashing else move_y * current_speed
+        self.rect.y += dy
+        for obs in obstacles:
+            if self.rect.colliderect(obs): self.rect.y = old_y
+
+        self.rect.x = max(0, min(WIDTH - self.size, self.rect.x))
+        self.rect.y = max(0, min(HEIGHT - self.size, self.rect.y))
+
+    def draw(self, surface):
+        if self.invincible_timer > 0 and int(self.invincible_timer * 12) % 2 == 0:
+            return 
+
+        if self.is_dashing:
+            pygame.draw.rect(surface, BLUE, (self.rect.x - self.last_move_dir[0]*12, self.rect.y - self.last_move_dir[1]*12, self.size, self.size), 2)
+        
+        pygame.draw.rect(surface, CYAN, self.rect)
+        if self.has_item:
+            pygame.draw.rect(surface, YELLOW, self.rect, 2)
+        if self.shield_timer > 0:
+            pygame.draw.rect(surface, BLUE, (self.rect.x - 4, self.rect.y - 4, self.size + 8, self.size + 8), 3)
+
+class Collectible:
+    def __init__(self):
+        self.size = 20
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+
+    def spawn(self, base_rect, obstacles):
+        while True:
+            self.rect.x = random.randint(50, WIDTH - 50)
+            self.rect.y = random.randint(50, HEIGHT - 50)
+            if self.rect.colliderect(base_rect): continue
+            if any(self.rect.colliderect(obs) for obs in obstacles): continue
+            break
+
+    def draw(self, surface):
+        pygame.draw.ellipse(surface, YELLOW, self.rect)
+
+class PowerUp:
+    def __init__(self):
+        self.size = 18
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+        self.active = False
+
+    def spawn(self, base_rect, obstacles):
+        self.active = True
+        while True:
+            self.rect.x = random.randint(50, WIDTH - 50)
+            self.rect.y = random.randint(50, HEIGHT - 50)
+            if self.rect.colliderect(base_rect): continue
+            if any(self.rect.colliderect(obs) for obs in obstacles): continue
+            break
+
+    def draw(self, surface):
+        if self.active:
+            pygame.draw.rect(surface, BLUE, self.rect)
+            pygame.draw.rect(surface, WHITE, self.rect, 1)
+
+class Enemy:
+    def __init__(self, obstacles, base_rect, enemy_type="BOUNCER"):
+        self.size = 20
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+        self.type = enemy_type 
+        
+        self.speed_x = random.choice([-2.5, 2.5])
+        self.speed_y = random.choice([-2.5, 2.5])
+        self.chase_speed = 1.8 
+
+        while True:
+            self.rect.x = random.randint(100, WIDTH - 100)
+            self.rect.y = random.randint(100, HEIGHT - 100)
+            safe_center = pygame.Rect(WIDTH//2 - 80, HEIGHT//2 - 80, 160, 160)
+            if self.rect.colliderect(safe_center) or self.rect.colliderect(base_rect): continue
+            if any(self.rect.colliderect(obs) for obs in obstacles): continue
+            break
+
+    def update(self, player_rect):
+        if self.type == "BOUNCER":
+            self.rect.x += self.speed_x
+            self.rect.y += self.speed_y
+            if self.rect.left <= 0 or self.rect.right >= WIDTH: self.speed_x *= -1
+            if self.rect.top <= 0 or self.rect.bottom >= HEIGHT: self.speed_y *= -1
+        
+        elif self.type == "CHASER":
+            dx = player_rect.centerx - self.rect.centerx
+            dy = player_rect.centery - self.rect.centery
+            dist = math.sqrt(dx**2 + dy**2)
+            if dist != 0:
+                self.rect.x += (dx / dist) * self.chase_speed
+                self.rect.y += (dy / dist) * self.chase_speed
+
+    def draw(self, surface):
+        color = ORANGE if self.type == "CHASER" else RED
+        pygame.draw.rect(surface, color, self.rect)
+        pygame.draw.rect(surface, WHITE, self.rect, 1)
+
+def generate_map(base_rect, player_rect=None):
+    obstacles = []
+    # Cria uma zona de segurança baseada na posição do jogador se ela existir (anti-softlock pós upgrade)
+    player_safe = pygame.Rect(player_rect.x - 50, player_rect.y - 50, 125, 125) if player_rect else pygame.Rect(0,0,0,0)
+    safe_zone = pygame.Rect(WIDTH//2 - 60, HEIGHT//2 - 60, 120, 120)
+    
+    while len(obstacles) < 6:
+        obs_w = random.randint(70, 130)
+        obs_h = random.randint(70, 130)
+        obs_x = random.randint(100, WIDTH - 200)
+        obs_y = random.randint(100, HEIGHT - 200)
+        new_obs = pygame.Rect(obs_x, obs_y, obs_w, obs_h)
+        
+        if not new_obs.colliderect(safe_zone) and not new_obs.colliderect(base_rect) and not new_obs.colliderect(player_safe):
+            obstacles.append(new_obs)
+    return obstacles
+
+def generate_zones(obstacles, base_rect):
+    speed_zones, slow_zones = [], []
+    while len(speed_zones) < 3:
+        rz = pygame.Rect(random.randint(80, WIDTH - 150), random.randint(80, HEIGHT - 150), 70, 70)
+        if not rz.colliderect(base_rect) and not any(rz.colliderect(o) for o in obstacles):
+            speed_zones.append(rz)
+    while len(slow_zones) < 3:
+        rz = pygame.Rect(random.randint(80, WIDTH - 150), random.randint(80, HEIGHT - 150), 70, 70)
+        if not rz.colliderect(base_rect) and not any(rz.colliderect(o) for o in obstacles) and not any(rz.colliderect(s) for s in speed_zones):
+            slow_zones.append(rz)
+    return speed_zones, slow_zones
+
+# Inicialização Inicial
+base_rect = pygame.Rect(50, 50, 85, 85)
+player = Player()
+item = Collectible()
+powerup = PowerUp()
+obstacles = generate_map(base_rect, player.rect)
+speed_zones, slow_zones = generate_zones(obstacles, base_rect)
+enemies = [Enemy(obstacles, base_rect, "BOUNCER")]
+
+def reset_full_game():
+    global deliveries_made, time_left, obstacles, speed_zones, slow_zones, enemies
+    deliveries_made = 0
+    time_left = LOOP_TIME
+    player.base_speed = 4.5
+    player.speed = player.base_speed
+    player.dash_cooldown_max = 1.5
+    player.shield_duration_max = 5.0
+    player.reset_pos()
+    powerup.active = False
+    obstacles = generate_map(base_rect, player.rect)
+    speed_zones, slow_zones = generate_zones(obstacles, base_rect)
+    item.spawn(base_rect, obstacles)
+    enemies = [Enemy(obstacles, base_rect, "BOUNCER")]
+
+item.spawn(base_rect, obstacles)
+last_ticks = pygame.time.get_ticks()
+
+running = True
+while running:
+    current_ticks = pygame.time.get_ticks()
+    dt = (current_ticks - last_ticks) / 1000.0
+    last_ticks = current_ticks
+
+    if current_state == STATE_MENU:
+        screen.fill(BLACK)
+        
+        title_txt = font_lg.render("CHRONOS EXPRESS", True, CYAN)
+        subtitle_txt = font_md.render("30 segundos para o fim do mundo!", True, WHITE)
+        subtitle2_txt = font_sm.render("Entregue o máximo que puder antes do tempo acabar!", True, WHITE)
+        subtitle3_txt = font_sm.render("Pressione ESPAÇO para começar", True, YELLOW)
+        
+        screen.blit(title_txt, (WIDTH//2 - title_txt.get_width()//2, HEIGHT//4))
+        screen.blit(subtitle_txt, (WIDTH//2 - subtitle_txt.get_width()//2, HEIGHT//2 - 20))
+        screen.blit(subtitle2_txt, (WIDTH//2 - subtitle2_txt.get_width()//2, HEIGHT//2 + 20))
+        screen.blit(subtitle3_txt, (WIDTH//2 - subtitle3_txt.get_width()//2, HEIGHT//2 + 60))
+        
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                reset_full_game()
+                current_state = STATE_PLAYING
+
+    elif current_state == STATE_PLAYING:
+        time_left -= dt
+        if player.shield_timer > 0: player.shield_timer -= dt
+        
+        if time_left <= 5.0 and int(time_left * 6) % 2 == 0:
+            screen.fill((45, 10, 15)) 
+        else:
+            screen.fill(BLACK)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3: player.trigger_dash()
+            if event.type == pygame.KEYDOWN and event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT]: player.trigger_dash()
+
+        keys = pygame.key.get_pressed()
+        player.move(keys, obstacles, speed_zones, slow_zones, dt)
+        for enemy in enemies: enemy.update(player.rect)
+
+        if not player.has_item and player.rect.colliderect(item.rect):
+            player.has_item = True
+
+        if powerup.active and player.rect.colliderect(powerup.rect):
+            player.shield_timer = player.shield_duration_max 
+            powerup.active = False
+
+        if player.has_item and player.rect.colliderect(base_rect):
+            deliveries_made += 1
+            player.has_item = False
+            player.speed += 0.3 
+            time_left = min(LOOP_TIME, time_left + 8.0) 
+            
+            obstacles = generate_map(base_rect, player.rect) 
+            speed_zones, slow_zones = generate_zones(obstacles, base_rect)
+            item.spawn(base_rect, obstacles)
+            
+            if not powerup.active and random.random() <= 0.3:
+                powerup.spawn(base_rect, obstacles)
+
+            # Adiciona inimigo a cada 5 entregas
+            if deliveries_made % 5 == 0:
+                enemies.append(Enemy(obstacles, base_rect, "CHASER"))
+                # PADRÃO CORRIGIDO: Ativa a tela de upgrades exatamente junto com o novo inimigo (a cada 5 entregas)
+                current_state = STATE_UPGRADE
+
+        if player.shield_timer <= 0 and player.invincible_timer <= 0:
+            for enemy in enemies:
+                if player.rect.colliderect(enemy.rect):
+                    time_left -= 3.0  
+                    player.invincible_timer = 1.5 
+                    break 
+
+        if time_left <= 0:
+            current_state = STATE_GAME_OVER
+
+        # Desenho do Cenário
+        for zone in speed_zones:
+            pygame.draw.rect(screen, DARK_GREEN, zone)
+            pygame.draw.rect(screen, GREEN, zone, 2)
+        for zone in slow_zones:
+            pygame.draw.rect(screen, DARK_PURPLE, zone)
+            pygame.draw.rect(screen, PURPLE, zone, 2)
+
+        pygame.draw.rect(screen, GREEN, base_rect, 3) 
+        for obs in obstacles:
+            pygame.draw.rect(screen, GRAY, obs)
+            pygame.draw.rect(screen, (90, 90, 110), obs, 2)
+        
+        if not player.has_item: item.draw(screen)
+        powerup.draw(screen)
+        player.draw(screen)
+        for enemy in enemies: enemy.draw(screen)
+
+        # Interface
+        timer_color = RED if time_left <= 5 else WHITE
+        timer_txt = font_lg.render(f"{max(0.0, time_left):.1f}s", True, timer_color)
+        score_txt = font_sm.render(f"ENTREGAS: {deliveries_made}", True, WHITE)
+        speed_percentage = int((player.speed / 4.5) * 100)
+        speed_txt = font_sm.render(f"VELOCIDADE: {speed_percentage}%", True, CYAN)
+
+        if player.dash_cooldown > 0:
+            dash_txt = font_sm.render(f"DASH: RECARGANDO", True, RED)
+        else:
+            dash_txt = font_sm.render("DASH: PRONTO!", True, BLUE)
+
+        screen.blit(timer_txt, (WIDTH - 160, 20))
+        screen.blit(score_txt, (20, HEIGHT - 85))
+        screen.blit(speed_txt, (20, HEIGHT - 55))
+        screen.blit(dash_txt, (20, HEIGHT - 25))
+
+        if player.shield_timer > 0:
+            shield_txt = font_sm.render(f"ESCUDO: {player.shield_timer:.1f}s", True, BLUE)
+            screen.blit(shield_txt, (20, HEIGHT - 115))
+        elif player.invincible_timer > 0:
+            imune_txt = font_sm.render(f"IMUNIDADE: {player.invincible_timer:.1f}s", True, WHITE)
+            screen.blit(imune_txt, (20, HEIGHT - 115))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    elif current_state == STATE_UPGRADE:
+        screen.fill((15, 15, 25))
+        up_title = font_lg.render("UPGRADE DISPONÍVEL", True, YELLOW)
+        instruction = font_md.render("Escolha o seu Módulo Temporal clicando em [1], [2] ou [3]:", True, WHITE)
+        
+        opt1 = font_sm.render("[1] HIPER-MOTORES: +15% de Velocidade de movimento permanente", True, CYAN)
+        opt2 = font_sm.render(f"[2] REBOBINAR DASH: Reduz tempo de recarga (Atual: {player.dash_cooldown_max:.1f}s)", True, BLUE)
+        opt3 = font_sm.render(f"[3] SUPER ESCUDO: Escudos duram +3 segundos extras", True, GREEN)
+        
+        screen.blit(up_title, (WIDTH//2 - up_title.get_width()//2, HEIGHT//5))
+        screen.blit(instruction, (WIDTH//2 - instruction.get_width()//2, HEIGHT//3 + 20))
+        screen.blit(opt1, (100, HEIGHT//2))
+        screen.blit(opt2, (100, HEIGHT//2 + 40))
+        screen.blit(opt3, (100, HEIGHT//2 + 80))
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key in [pygame.K_1, pygame.K_KP1]:
+                    player.base_speed += 0.7
+                    player.speed = player.base_speed
+                    current_state = STATE_PLAYING
+                    last_ticks = pygame.time.get_ticks() 
+                elif event.key in [pygame.K_2, pygame.K_KP2]:
+                    player.dash_cooldown_max = max(0.4, player.dash_cooldown_max - 0.3)
+                    current_state = STATE_PLAYING
+                    last_ticks = pygame.time.get_ticks()
+                elif event.key in [pygame.K_3, pygame.K_KP3]:
+                    player.shield_duration_max += 3.0
+                    current_state = STATE_PLAYING
+                    last_ticks = pygame.time.get_ticks()
+
+    elif current_state == STATE_GAME_OVER:
+        screen.fill((25, 10, 10)) 
+        gameover_txt = font_lg.render("TEMPO ESGOTADO", True, RED)
+        final_score_txt = font_md.render(f"Entregas feitas: {deliveries_made}", True, WHITE)
+        restart_txt = font_sm.render("Pressione ESPAÇO para tentar de novo", True, CYAN)
+        
+        screen.blit(gameover_txt, (WIDTH//2 - gameover_txt.get_width()//2, HEIGHT//3))
+        screen.blit(final_score_txt, (WIDTH//2 - final_score_txt.get_width()//2, HEIGHT//2))
+        screen.blit(restart_txt, (WIDTH//2 - restart_txt.get_width()//2, HEIGHT - 100))
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                current_state = STATE_MENU
+
+pygame.quit()
+sys.exit()
