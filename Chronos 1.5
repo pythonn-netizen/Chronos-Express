@@ -1,0 +1,194 @@
+import pygame
+import random
+import sys
+
+pygame.init()
+
+# Configurações da tela
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Chronos Express - Beta v2.0")
+clock = pygame.time.Clock()
+
+# Cores Cyberpunk
+BLACK = (15, 15, 20)
+WHITE = (240, 240, 240)
+CYAN = (0, 255, 255)     # Jogador
+YELLOW = (255, 255, 0)   # Bateria
+GREEN = (0, 255, 100)    # Máquina do Tempo
+RED = (255, 50, 50)      # Timer / Perigo
+GRAY = (70, 70, 80)      # Obstáculos
+
+font = pygame.font.SysFont("Arial", 24, bold=True)
+large_font = pygame.font.SysFont("Arial", 50, bold=True)
+
+LOOP_TIME = 30.0
+deliveries_made = 0
+time_left = LOOP_TIME
+
+class Player:
+    def __init__(self):
+        self.size = 25
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+        self.reset_pos()
+        self.speed = 4.0
+        self.has_item = False
+
+    def reset_pos(self):
+        self.rect.x = WIDTH // 2
+        self.rect.y = HEIGHT // 2
+        self.has_item = False
+
+    def move(self, keys, obstacles):
+        # Guardamos a posição antiga caso ocorra uma colisão
+        old_x = self.rect.x
+        old_y = self.rect.y
+
+        # Movimento Horizontal
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]: self.rect.x -= self.speed
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: self.rect.x += self.speed
+        
+        # Se colidir com qualquer obstáculo na horizontal, desfaz o movimento
+        for obs in obstacles:
+            if self.rect.colliderect(obs):
+                self.rect.x = old_x
+
+        # Movimento Vertical
+        if keys[pygame.K_UP] or keys[pygame.K_w]: self.rect.y -= self.speed
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]: self.rect.y += self.speed
+        
+        # Se colidir com qualquer obstáculo na vertical, desfaz o movimento
+        for obs in obstacles:
+            if self.rect.colliderect(obs):
+                self.rect.y = old_y
+
+        # Limites da tela
+        self.rect.x = max(0, min(WIDTH - self.size, self.rect.x))
+        self.rect.y = max(0, min(HEIGHT - self.size, self.rect.y))
+
+    def draw(self, surface):
+        pygame.draw.rect(surface, CYAN, self.rect)
+
+class Collectible:
+    def __init__(self):
+        self.size = 20
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+
+    def spawn(self, base_rect, obstacles):
+        # Garante que o item não nasça dentro da base ou de paredes
+        while True:
+            self.rect.x = random.randint(50, WIDTH - 50)
+            self.rect.y = random.randint(50, HEIGHT - 50)
+            
+            # Checa se colide com a base
+            if self.rect.colliderect(base_rect):
+                continue
+            
+            # Checa se colide com alguma parede
+            hit_obstacle = any(self.rect.colliderect(obs) for obs in obstacles)
+            if hit_obstacle:
+                continue
+                
+            break # Se passou em todos os testes, o lugar é seguro
+
+    def draw(self, surface):
+        pygame.draw.ellipse(surface, YELLOW, self.rect)
+
+
+# --- CONFIGURAÇÃO DO MAPA (Fora das classes, no escopo global) ---
+base_rect = pygame.Rect(50, 50, 80, 80)
+player = Player()
+item = Collectible()
+
+# Criamos uma "Zona Segura" no centro da tela onde o jogador nasce
+safe_zone = pygame.Rect(WIDTH//2 - 50, HEIGHT//2 - 50, 100, 100)
+
+# Gerar obstáculos fixos pelo mapa (Anomalias) de forma segura
+obstacles = []
+while len(obstacles) < 6:
+    obs_w = random.randint(60, 120)
+    obs_h = random.randint(60, 120)
+    obs_x = random.randint(150, WIDTH - 150)
+    obs_y = random.randint(150, HEIGHT - 150)
+    new_obs = pygame.Rect(obs_x, obs_y, obs_w, obs_h)
+    
+    # Só adiciona a parede se ela NÃO bater na zona segura nem na base verde
+    if not new_obs.colliderect(safe_zone) and not new_obs.colliderect(base_rect):
+        obstacles.append(new_obs)
+
+# Primeiro spawn do item livre de perigos
+item.spawn(base_rect, obstacles)
+
+# Linha crucial que calcula a passagem do tempo
+last_ticks = pygame.time.get_ticks()
+
+# --- LOOP PRINCIPAL ---
+running = True
+while running:
+    screen.fill(BLACK)
+    
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    # Delta Time para consistência de tempo
+    current_ticks = pygame.time.get_ticks()
+    dt = (current_ticks - last_ticks) / 1000.0
+    last_ticks = current_ticks
+    time_left -= dt
+
+    # Movimentação com checagem de colisão por parede
+    keys = pygame.key.get_pressed()
+    player.move(keys, obstacles)
+
+    # Colisão: Jogador pega o Item
+    if not player.has_item and player.rect.colliderect(item.rect):
+        player.has_item = True
+
+    # Colisão: Jogador entrega na Base
+    if player.has_item and player.rect.colliderect(base_rect):
+        deliveries_made += 1
+        player.has_item = False
+        item.spawn(base_rect, obstacles)
+        player.speed += 0.6  # Upgrade cumulativo!
+
+    # O LOOP TEMPORAL OCORREU!
+    if time_left <= 0:
+        time_left = LOOP_TIME
+        player.reset_pos()
+        item.spawn(base_rect, obstacles)
+
+    # --- DESENHAR ELEMENTOS ---
+    # Desenha a base (máquina do tempo)
+    pygame.draw.rect(screen, GREEN, base_rect, 3)
+    
+    # Desenha os obstáculos
+    for obs in obstacles:
+        pygame.draw.rect(screen, GRAY, obs)
+        pygame.draw.rect(screen, (100, 100, 110), obs, 2) # Borda estilizada
+
+    # Desenha o item se não tiver sido coletado
+    if not player.has_item:
+        item.draw(screen)
+
+    player.draw(screen)
+
+    # --- INTERFACE DE USUÁRIO (UI) ---
+    timer_color = RED if time_left <= 5 else WHITE
+    timer_text = large_font.render(f"{max(0.0, time_left):.1f}s", True, timer_color)
+    score_text = font.render(f"Entregas Salvas: {deliveries_made}", True, WHITE)
+    speed_text = font.render(f"Velocidade do Motor: {player.speed:.1f}x", True, CYAN)
+    
+    if player.has_item:
+        status_text = font.render("BATERIA COLETADA! RETORNE À BASE!", True, YELLOW)
+        screen.blit(status_text, (WIDTH//2 - status_text.get_width()//2, HEIGHT - 40))
+
+    screen.blit(timer_text, (WIDTH - 150, 20))
+    screen.blit(score_text, (20, HEIGHT - 70))
+    screen.blit(speed_text, (20, HEIGHT - 40))
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()
+sys.exit()
