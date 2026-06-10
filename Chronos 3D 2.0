@@ -1,16 +1,27 @@
+import sys
+# 🔥 CORREÇÃO CRUCIAL PARA WINDOWS (DPI AWARE)
+# Impede que o Windows aplique o "zoom de 125%/150%" que corta a tela e trava os controles
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.user32.SetProcessDPIAware()
+    except:
+        pass
+
 from ursina import *
 import random
 import math
-import sys
 
 # Inicializa o motor gráfico
 app = Ursina()
 
-# --- CONFIGURAÇÕES DE JANELA ESTÁVEIS ---
-window.title = "Chronos Express 3D - Arrow Keys Fixed"
+# --- CONFIGURAÇÕES DE JANELA ULTRA ESTÁVEIS ---
+window.title = "Chronos Express 3D - Universal Shield Fix"
 window.fps_counter.enabled = True
 window.fullscreen = False
 window.borderless = False
+window.size = (1280, 720)       # Tamanho fixo seguro para qualquer monitor/notebook
+window.center_on_screen()       # Força a janela a ficar no centro perfeito da tela
 
 # Adiciona o Céu para eliminar o fundo cinza
 Sky()
@@ -145,11 +156,11 @@ def update():
     
     score_text.text = f'Entregas: {deliveries_made}\nNúcleos: {time_cores}'
     
-    # CORREÇÃO: Rotação usando os nomes certos da Ursina ('arrow left' / 'arrow right')
+    # Rotação usando os nomes certos da Ursina ('arrow left' / 'arrow right')
     turn_input = (held_keys['l'] - held_keys['j']) + (held_keys['arrow right'] - held_keys['arrow left'])
     player.rotation_y += turn_input * 140.0 * dt
     
-    # CORREÇÃO: Movimentação usando os nomes certos ('arrow up' / 'arrow down')
+    # Movimentação usando os nomes certos ('arrow up' / 'arrow down')
     move_forward = (held_keys['w'] - held_keys['s']) + (held_keys['arrow up'] - held_keys['arrow down'])
     move_sideways = (held_keys['d'] - held_keys['a'])
     
