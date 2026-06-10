@@ -1,11 +1,11 @@
 import sys
 
-# 1. DIRETIVAS DE INICIALIZAÇÃO CRUTIAIS PARA O MOTOR GRÁFICO
+# 1. FORÇAR A PROPORÇÃO EXATA DO SEU MONITOR (5:4 - 1280x1024)
 from panda3d.core import loadPrcFileData
-loadPrcFileData("", "win-size 1280 720")
+loadPrcFileData("", "win-size 1280 1024")
 loadPrcFileData("", "fullscreen false")
 loadPrcFileData("", "undecorated false")
-loadPrcFileData("", "window-title Chronos Express 3D - Final Stable")
+loadPrcFileData("", "window-title Chronos Express 3D - Monitor Quadrado Fix")
 loadPrcFileData("", "framebuffer-hardware true")
 loadPrcFileData("", "framebuffer-software false")
 
@@ -20,11 +20,11 @@ from ursina import *
 import random
 import math
 
-# Inicializa o motor com as configurações aplicadas
+# Inicializa o motor com a proporção do seu monitor
 app = Ursina()
 
-# Garante que a janela respeite o tamanho estipulado e fique visível
-window.size = (1280, 720)
+# Trava a janela no tamanho correto para não cortar nada
+window.size = (1280, 1024)
 window.fullscreen = False
 window.borderless = False
 window.center_on_screen()
@@ -47,7 +47,7 @@ speed_lvl = 1
 jump_lvl = 1
 time_lvl = 1
 
-# --- MAPA SEGURO CORRIGIDO ---
+# --- MAPA ---
 floor = Entity(model='cube', scale=(300, 0.1, 300), y=0, color=color.dark_gray, collider='box')
 
 # Barreiras externas
@@ -92,17 +92,17 @@ Entity(parent=player, model='cube', color=color.white, position=(0, 0.4, 0.4), s
 Sky()
 DirectionalLight(y=2, z=-3, x=1).look_at(Vec3(0,0,0))
 
-# Câmera Estável Inicial
+# Câmera Ajustada para Telas Quadradas
 camera.parent = scene
-camera.position = (0, 15, -25)
+camera.position = (0, 18, -28) # Afastada um pouco mais para compensar a largura menor
 
 is_jumping, vertical_velocity = False, 0
 
-# --- INTERFACE (UI) ANCORADA CORRETAMENTE ---
-timer_text = Text(parent=camera.ui, text='', position=(0.6, 0.4), scale=2.5, color=color.red) 
-score_text = Text(parent=camera.ui, text='', position=(-0.8, 0.4), scale=1.8, color=color.green) 
+# --- INTERFACE AJUSTADA PARA PROPORÇÃO 5:4 (TRAVADA NO CENTRO UTILIZÁVEL) ---
+timer_text = Text(parent=camera.ui, text='', position=(0.5, 0.4), scale=2.5, color=color.red) 
+score_text = Text(parent=camera.ui, text='', position=(-0.6, 0.4), scale=1.8, color=color.green) 
 status_text = Text(parent=camera.ui, text='CARREGANDO MUNDO...', position=(-0.3, 0.3), scale=1.6, color=color.yellow) 
-help_text = Text(parent=camera.ui, text='[WASD / Setas] Mover | [J L] Girar Câmera | [ESPAÇO] Pular | [SHIFT] Dash', position=(-0.4, -0.4), scale=1.2, color=color.light_gray) 
+help_text = Text(parent=camera.ui, text='[WASD / Setas] Mover | [J L] Câmera | [ESPAÇO] Pular | [SHIFT] Dash', position=(-0.4, -0.4), scale=1.1, color=color.light_gray) 
 
 # Painel da Loja
 shop_panel = Entity(enabled=False, parent=camera.ui, model='quad', scale=(0.8, 0.6), color=color.black90, position=(0,0))
@@ -137,14 +137,12 @@ def input(key):
     if key == 'space' and not is_jumping and startup_buffer <= 0: 
         is_jumping, vertical_velocity = True, jump_height
 
-# Pequeno intervalo para estabilizar o contexto de renderização
 startup_buffer = 0.5
 
 def update():
     global time_left, deliveries_made, time_cores, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity, in_shop, dash_cooldown, startup_buffer
     
-    # Previne falhas de renderização forçando o ponto de visão desde o frame zero
-    camera.position = player.position - player.forward * 25 + Vec3(0, 12, 0)
+    camera.position = player.position - player.forward * 28 + Vec3(0, 14, 0)
     camera.look_at(player.position + Vec3(0, 2, 0))
 
     if startup_buffer > 0:
@@ -163,7 +161,6 @@ def update():
     
     score_text.text = f'Entregas: {deliveries_made}\nNúcleos: {time_cores}'
     
-    # Tratamento redundante para mapeamento de setas (Evita falhas do Windows/Linux)
     arrow_left_active = max(held_keys['arrow left'], held_keys['left arrow'])
     arrow_right_active = max(held_keys['arrow right'], held_keys['right arrow'])
     arrow_up_active = max(held_keys['arrow up'], held_keys['up arrow'])
@@ -178,13 +175,13 @@ def update():
     move_sideways = (held_keys['d'] - held_keys['a'])
     
     current_speed = player_speed
-    status_text.text = 'BUSQUE A BATERIA AMARELA NO MAPA GIGANTE!'
+    status_text.text = 'BUSQUE A BATERIA AMARELA NO MAPA!'
     status_text.color = color.yellow
     
     for t in traps:
         if distance(player.position, t.position) < 6.0 and player.y <= 1.5: 
             current_speed = player_speed * 0.4
-            status_text.text = "ZONA DE LENTIDÃO! PULE PARA SAIR!"
+            status_text.text = "ZONA DE LENTIDÃO!"
             status_text.color = color.red
             
     if held_keys['left shift'] and dash_cooldown <= 0: 
@@ -197,7 +194,7 @@ def update():
         if not raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_dir, distance=2.0, ignore=(player,)).hit: 
             player.position += move_dir * current_speed * dt
             
-    # Movimentação dos Drones
+    # Drones
     for d in drones:
         t_pos = Vec3(d.target_x, d.y, d.target_z)
         if distance(d.position, t_pos) > 1.0: 
@@ -207,10 +204,10 @@ def update():
             d.target_x, d.target_z = random.randint(-135, 135), random.randint(-135, 135)
         if distance(player.position, d.position) < 3.5: 
             time_left -= 6 * dt
-            status_text.text = "DRONE TE CAÇOU! -6 SEGUNDOS!"
+            status_text.text = "DRONE TE CAÇOU!"
             status_text.color = color.orange
             
-    # Mecânica de Pulo e Gravidade
+    # Gravidade
     if is_jumping:
         player.y += vertical_velocity * dt
         vertical_velocity -= 38 * dt 
@@ -219,12 +216,12 @@ def update():
             is_jumping = False
             vertical_velocity = 0
     
-    # Animação do Item Coletável
+    # Bateria
     if item.enabled: 
         item.rotation_y += 45 * dt
         item.y = 1.5 + math.sin(elapsed_time * 5) * 0.3
         
-    # Exibição do Cronômetro
+    # Cronômetro
     if time_left <= 5: 
         timer_text.color = color.red
         timer_text.scale = 2.5 + math.sin(elapsed_time * 20) * 0.2
@@ -233,10 +230,10 @@ def update():
         timer_text.scale = 2.5
     timer_text.text = f"{max(0.0, time_left):.1f}s"
     
-    # Verificação de Coleta e Entrega
+    # Coleta
     if not has_item and item.enabled and distance(player.position, item.position) < 4.5: 
         has_item = True
-        status_text.text = "BATERIA COLETADA! LEVE ATÉ A BASE VERDE!"
+        status_text.text = "LEVE ATÉ A BASE VERDE!"
         status_text.color = color.lime
         item.disable()
         
@@ -244,11 +241,10 @@ def update():
         deliveries_made += 1
         time_cores += 1
         has_item = False
-        status_text.text = "ENTREGA FEITA! +1 NÚCLEO TEMPORAL!"
+        status_text.text = "+1 NÚCLEO TEMPORAL!"
         status_text.color = color.yellow
         respawn_item()
         
-    # Fim do Loop
     if time_left <= 0: 
         has_item = False
         player.position = (0, 1.5, 0)
