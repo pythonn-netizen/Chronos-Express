@@ -4,11 +4,11 @@ import math
 import sys
 import os
 
-# 🛠️ CORREÇÃO DE ESCALA PARA WINDOWS (DPI AWARENESS)
-# Isso informa ao Windows para não forçar escala na janela do jogo.
+# 🛠️ CORREÇÃO DE ESCALA E FOCO PARA WINDOWS
 if os.name == 'nt': 
     import ctypes
     try:
+        # Avisa o Windows para não distorcer o jogo
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except:
         try:
@@ -19,18 +19,25 @@ if os.name == 'nt':
 # Inicializa o motor
 app = Ursina()
 
-# --- CONFIGURAÇÕES DE JANELA (MULTIPLATAFORMA) ---
-# Usamos uma resolução estável HD e modo janela para evitar barras pretas no Windows.
+# --- CONFIGURAÇÕES DE JANELA TIPO "JANELA SEGUIDA" ---
 window.fps_counter.enabled = True
 window.title = "Chronos Express 3D - Multiplatform Fixed"
 window.fullscreen = False       
 window.borderless = False       
-window.size = (1280, 720)       # Resolução padrão HD
+window.size = (1280, 720)       
 window.center_on_screen()       
 
-# Correção de renderização para o mapa gigante
-camera.clip_plane_far = 600  
+# Força o motor a aceitar os inputs do teclado imediatamente
+mouse.locked = False
+mouse.visible = True
+
+# Parâmetros de Renderização Otimizados
+camera.clip_plane_far = 800  
 scene.fog_density = 0        
+
+# Adiciona uma luz para garantir visibilidade em qualquer GPU/Sistema
+sun = DirectionalLight()
+sun.look_at(Vec3(1, -1, 1))
 
 # --- VARIÁVEIS DE JOGO & ECONOMIA ---
 base_loop_time = 30.0
@@ -92,24 +99,20 @@ item = Entity(model='sphere', position=(100, 1.5, -100), scale=2, color=color.ye
 player = Entity(model='cube', color=color.cyan, position=(0, 1.5, 0), scale=(1.5, 3, 1.5), collider='box')
 Entity(parent=player, model='cube', color=color.white, position=(0, 0.4, 0.4), scale=(0.8, 0.2, 0.2))
 
-# Câmera Livre
+# Câmera Livre Ajustada para herança limpa
 camera_container = Entity(parent=player)
 camera.parent = camera_container
 camera.position = (0, 10, -25) 
 camera.rotation_x = 22       
 
-mouse.locked = False
-mouse.visible = True
-
 is_jumping, vertical_velocity = False, 0
 CAMERA_TARGET_DISTANCE, CAMERA_TARGET_HEIGHT = -25, 10
 
-# --- 🛠️ CORREÇÃO E ALINHAMENTO DA INTERFACE (UI) 🛠️ ---
-# Definimos as posições exatas usando os cantos da tela (TopLeft, TopRight, etc.)
-timer_text = Text(text='', position=(0.48, 0.48), scale=2.5, origin=(1,1), color=color.red) # Canto Superior Direito (TopRight)
-score_text = Text(text='', position=(-0.48, 0.48), scale=1.8, origin=(-1,1), color=color.green) # Canto Superior Esquerdo (TopLeft)
-status_text = Text(text='', position=(0, 0.35), scale=1.6, origin=(0,1), color=color.yellow) # Centralizado Superior
-help_text = Text(text='[WASD] Mover | [I K J L] Câmera Livre | [ESPAÇO] Pular | [SHIFT] Dash | [ESC] Sair', position=(0, -0.48), scale=1.2, origin=(0,-1), color=color.light_gray) # Centralizado Inferior (BottomCenter)
+# --- INTERFACE (UI) ---
+timer_text = Text(text='', position=(0.48, 0.48), scale=2.5, origin=(1,1), color=color.red) 
+score_text = Text(text='', position=(-0.48, 0.48), scale=1.8, origin=(-1,1), color=color.green) 
+status_text = Text(text='', position=(0, 0.35), scale=1.6, origin=(0,1), color=color.yellow) 
+help_text = Text(text='[WASD] Mover | [I K J L] Câmera Livre | [ESPAÇO] Pular | [SHIFT] Dash | [ESC] Sair', position=(0, -0.48), scale=1.2, origin=(0,-1), color=color.light_gray) 
 
 # Painel da Loja
 shop_panel = Entity(enabled=False, parent=camera.ui, model='quad', scale=(0.7, 0.6), color=color.black90, position=(0,0))
@@ -141,21 +144,41 @@ def input(key):
         return
     if key == 'space' and not is_jumping: is_jumping, vertical_velocity = True, jump_height
 
+# Controla se o primeiro frame já rodou para forçar o foco no Windows
+first_frame = True
+
 def update():
-    global time_left, deliveries_made, time_cores, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity, in_shop, dash_cooldown
-    if in_shop: shop_cores_text.text = f"Seus Núcleos Temporais: {time_cores}\n\n[1] Velocidade (Lvl {speed_lvl})\n[2] Altura Pulo (Lvl {jump_lvl})\n[3] Tempo do Loop (Lvl {time_lvl})"; return
+    global time_left, deliveries_made, time_cores, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity, in_shop, dash_cooldown, first_frame
+    
+    # 🛠️ GATILHO DE FOCO: Força o Windows a escutar os controles do teclado no primeiro frame
+    if first_frame:
+        first_frame = False
+        # Dá um "clique virtual" interno para focar os comandos WASD
+        window.center_on_screen()
+        return
+
+    if in_shop: 
+        shop_cores_text.text = f"Seus Núcleos Temporais: {time_cores}\n\n[1] Velocidade (Lvl {speed_lvl})\n[2] Altura Pulo (Lvl {jump_lvl})\n[3] Tempo do Loop (Lvl {time_lvl})"
+        return
+        
     time_left, elapsed_time = time_left-time.dt, elapsed_time+time.dt
     if dash_cooldown > 0: dash_cooldown -= time.dt
     score_text.text = f'Entregas: {deliveries_made}\nNúcleos: {time_cores}'
+    
+    # Comandos de rotação por teclado (I K J L)
     player.rotation_y += (held_keys['l'] - held_keys['j']) * 140.0 * time.dt
     camera_container.rotation_x = clamp(camera_container.rotation_x + (held_keys['k'] - held_keys['i']) * 140.0 * time.dt, -85, 85) 
+    
     current_speed, status_text.text, status_text.color = player_speed, 'BUSQUE A BATERIA AMARELA NO MAPA GIGANTE!', color.yellow
     for t in traps:
         if distance(player.position, t.position) < 6.0 and player.y <= 1.5: current_speed, status_text.text, status_text.color = player_speed*0.4, "ZONA DE LENTIDÃO! PULE PARA SAIR!", color.red
     if held_keys['left shift'] and dash_cooldown <= 0: current_speed, dash_cooldown = current_speed*2.5, 1.5  
+    
     move_dir = (player.forward * (held_keys['w'] - held_keys['s']) + player.right * (held_keys['d'] - held_keys['a'])).normalized()
     if move_dir.length() > 0:
-        if not raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_dir, distance=max(2.0, (current_speed * time.dt) + 1.2), ignore=(player,)).hit: player.position += move_dir * current_speed * time.dt
+        if not raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_dir, distance=max(2.0, (current_speed * time.dt) + 1.2), ignore=(player,)).hit: 
+            player.position += move_dir * current_speed * time.dt
+            
     for d in drones:
         t_pos = Vec3(d.target_x, d.y, d.target_z); d.look_at(t_pos); d.position += d.forward * 20 * time.dt  
         if distance(d.position, t_pos) < 5.0: d.target_x, d.target_z = random.randint(-135, 135), random.randint(-135, 135)
@@ -163,14 +186,17 @@ def update():
     if is_jumping:
         player.y += vertical_velocity * time.dt; vertical_velocity -= 38 * time.dt 
         if player.y <= 1.5: player.y, is_jumping, vertical_velocity = 1.5, False, 0
+        
     desired_cam = player.position + (player.forward * CAMERA_TARGET_DISTANCE) + Vec3(0, CAMERA_TARGET_HEIGHT, 0)
     c_hit = raycast(origin=player.position + Vec3(0, 1, 0), direction=desired_cam-(player.position + Vec3(0, 1, 0)), distance=distance(player.position+Vec3(0,1,0), desired_cam), ignore=(player, camera,))
     if c_hit.hit: camera.position = (0, lerp(camera.position.y, CAMERA_TARGET_HEIGHT/2, time.dt*15), lerp(camera.position.z, CAMERA_TARGET_DISTANCE/2, time.dt*15))
     else: camera.position = (0, lerp(camera.position.y, CAMERA_TARGET_HEIGHT, time.dt*15), lerp(camera.position.z, CAMERA_TARGET_DISTANCE, time.dt*15))
+    
     if item.enabled: item.rotation_y, item.y = item.rotation_y+45*time.dt, 1.5+math.sin(elapsed_time*5)*0.3
     if time_left <= 5: timer_text.color, timer_text.scale = color.red, 2.5 + math.sin(elapsed_time*20)*0.2
     else: timer_text.color, timer_text.scale = color.red, 2.5
     timer_text.text = f"{max(0.0, time_left):.1f}s"
+    
     if not has_item and item.enabled and distance(player.position, item.position) < 4.5: has_item, status_text.text, status_text.color = True, "BATERIA COLETADA! LEVE ATÉ A BASE VERDE!", color.lime; item.disable()
     if has_item and distance(player.position, base_delivery.position) < 9.0: deliveries_made, time_cores, has_item, status_text.text, status_text.color = deliveries_made+1, time_cores+1, False, "ENTREGA FEITA! +1 NÚCLEO TEMPORAL!", color.yellow; respawn_item()
     if time_left <= 0: has_item, player.position, player.rotation, in_shop = False, (0, 1.5, 0), (0, 0, 0), True; shop_panel.enable()
