@@ -2,38 +2,20 @@ from ursina import *
 import random
 import math
 import sys
-import os
-
-# 🛠️ CORREÇÃO DE ESCALA PARA WINDOWS
-if os.name == 'nt': 
-    import ctypes
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except:
-            pass
 
 # Inicializa o motor
 app = Ursina()
 
 # --- CONFIGURAÇÕES DE JANELA ---
-window.fps_counter.enabled = True
-window.title = "Chronos Express 3D - Multiplatform Fixed"
+window.title = "Chronos Express 3D - Fixed Inputs"
 window.fullscreen = False       
 window.borderless = False       
-window.size = (1280, 720)       
-window.center_on_screen()       
+window.fps_counter.enabled = True
 
-# Adiciona um Céu (Sky) para evitar a "Tela Cinza do Vazio"
+# Adiciona um Céu (Sky) para evitar a "Tela Cinza"
 Sky()
 
-# Força o motor a destravar o mouse 
-mouse.locked = False
-mouse.visible = True
-
-# Parâmetros de Renderização Otimizados
+# Parâmetros de Renderização 
 camera.clip_plane_far = 800  
 scene.fog_density = 0        
 
@@ -46,12 +28,11 @@ has_item = False
 elapsed_time = 0.0
 in_shop = False
 
-# Atributos do jogador (Upgradables)
+# Atributos do jogador 
 player_speed = 35.0
 jump_height = 14.0
 dash_cooldown = 0.0
 
-# Níveis dos Upgrades
 speed_lvl = 1
 jump_lvl = 1
 time_lvl = 1
@@ -97,7 +78,7 @@ item = Entity(model='sphere', position=(100, 1.5, -100), scale=2, color=color.ye
 player = Entity(model='cube', color=color.cyan, position=(0, 1.5, 0), scale=(1.5, 3, 1.5), collider='box')
 Entity(parent=player, model='cube', color=color.white, position=(0, 0.4, 0.4), scale=(0.8, 0.2, 0.2))
 
-# Câmera Livre Ajustada
+# Câmera
 camera_container = Entity(parent=player)
 camera.parent = camera_container
 camera.position = (0, 10, -25) 
@@ -106,13 +87,13 @@ camera.rotation_x = 22
 is_jumping, vertical_velocity = False, 0
 CAMERA_TARGET_DISTANCE, CAMERA_TARGET_HEIGHT = -25, 10
 
-# --- INTERFACE (UI) ---
-timer_text = Text(text='', position=(0.48, 0.48), scale=2.5, origin=(1,1), color=color.red) 
-score_text = Text(text='', position=(-0.48, 0.48), scale=1.8, origin=(-1,1), color=color.green) 
-status_text = Text(text='', position=(0, 0.35), scale=1.6, origin=(0,1), color=color.yellow) 
-help_text = Text(text='[WASD] Mover | [I K J L] Câmera Livre | [ESPAÇO] Pular | [SHIFT] Dash | [ESC] Sair', position=(0, -0.48), scale=1.2, origin=(0,-1), color=color.light_gray) 
+# --- INTERFACE (UI) ÂNCORAS NATIVAS ---
+timer_text = Text(text='', position=window.top_right - (0.05, 0.05), scale=2.5, origin=(0.5, 0.5), color=color.red) 
+score_text = Text(text='', position=window.top_left + (0.05, -0.05), scale=1.8, origin=(-0.5, 0.5), color=color.green) 
+status_text = Text(text='', position=window.top + (0, -0.1), scale=1.6, origin=(0, 0), color=color.yellow) 
+help_text = Text(text='[WASD] Mover | [I K J L] Câmera Livre | [ESPAÇO] Pular | [SHIFT] Dash', position=window.bottom + (0, 0.05), scale=1.2, origin=(0, 0), color=color.light_gray) 
 
-# Painel da Loja (Centralizado e claro)
+# Painel da Loja
 shop_panel = Entity(enabled=False, parent=camera.ui, model='quad', scale=(0.85, 0.75), color=color.black90, position=(0,0))
 shop_title = Text(parent=shop_panel, text="--- LOJA TEMPORAL ---", scale=2.5, origin=(0,-2), color=color.cyan, position=(0, 0.4))
 shop_cores_text = Text(parent=shop_panel, text="", scale=1.8, origin=(0,-0.5), color=color.yellow, position=(0, 0.1))
@@ -154,7 +135,7 @@ def input(key):
 def update():
     global time_left, deliveries_made, time_cores, has_item, elapsed_time, player_speed, is_jumping, vertical_velocity, in_shop, dash_cooldown
     
-    # 🛠️ CORREÇÃO ANTI-CONGELAMENTO: Limita o "pulo de tempo" no momento em que o Windows carrega o jogo
+    # Trava de segurança do tempo
     dt = time.dt
     if dt > 0.1:
         dt = 0.1
@@ -173,14 +154,19 @@ def update():
     player.rotation_y += (held_keys['l'] - held_keys['j']) * 140.0 * dt
     camera_container.rotation_x = clamp(camera_container.rotation_x + (held_keys['k'] - held_keys['i']) * 140.0 * dt, -85, 85) 
     
-    current_speed, status_text.text, status_text.color = player_speed, 'BUSQUE A BATERIA AMARELA NO MAPA GIGANTE!', color.yellow
+    current_speed = player_speed
+    status_text.text = 'BUSQUE A BATERIA AMARELA NO MAPA GIGANTE!'
+    status_text.color = color.yellow
     
     for t in traps:
         if distance(player.position, t.position) < 6.0 and player.y <= 1.5: 
-            current_speed, status_text.text, status_text.color = player_speed * 0.4, "ZONA DE LENTIDÃO! PULE PARA SAIR!", color.red
+            current_speed = player_speed * 0.4
+            status_text.text = "ZONA DE LENTIDÃO! PULE PARA SAIR!"
+            status_text.color = color.red
             
     if held_keys['left shift'] and dash_cooldown <= 0: 
-        current_speed, dash_cooldown = current_speed * 2.5, 1.5  
+        current_speed *= 2.5
+        dash_cooldown = 1.5  
     
     # Movimentação WASD
     move_dir = (player.forward * (held_keys['w'] - held_keys['s']) + player.right * (held_keys['d'] - held_keys['a']))
@@ -192,20 +178,24 @@ def update():
     # Lógica dos Drones
     for d in drones:
         t_pos = Vec3(d.target_x, d.y, d.target_z)
-        if distance(d.position, t_pos) > 1.0: # Impede crash de rotação 
+        if distance(d.position, t_pos) > 1.0: 
             d.look_at(t_pos)
             d.position += d.forward * 20 * dt  
         if distance(d.position, t_pos) < 5.0: 
             d.target_x, d.target_z = random.randint(-135, 135), random.randint(-135, 135)
         if distance(player.position, d.position) < 3.5: 
-            time_left, status_text.text, status_text.color = time_left - 6 * dt, "DRONE TE CAÇOU! -6 SEGUNDOS!", color.orange
+            time_left -= 6 * dt
+            status_text.text = "DRONE TE CAÇOU! -6 SEGUNDOS!"
+            status_text.color = color.orange
             
     # Gravidade
     if is_jumping:
         player.y += vertical_velocity * dt
         vertical_velocity -= 38 * dt 
         if player.y <= 1.5: 
-            player.y, is_jumping, vertical_velocity = 1.5, False, 0
+            player.y = 1.5
+            is_jumping = False
+            vertical_velocity = 0
         
     # Câmera Seguidora
     desired_cam = player.position + (player.forward * CAMERA_TARGET_DISTANCE) + Vec3(0, CAMERA_TARGET_HEIGHT, 0)
@@ -217,26 +207,38 @@ def update():
     
     # Coisas Visuais e Cronômetro
     if item.enabled: 
-        item.rotation_y, item.y = item.rotation_y + 45 * dt, 1.5 + math.sin(elapsed_time * 5) * 0.3
+        item.rotation_y += 45 * dt
+        item.y = 1.5 + math.sin(elapsed_time * 5) * 0.3
         
     if time_left <= 5: 
-        timer_text.color, timer_text.scale = color.red, 2.5 + math.sin(elapsed_time * 20) * 0.2
+        timer_text.color = color.red
+        timer_text.scale = 2.5 + math.sin(elapsed_time * 20) * 0.2
     else: 
-        timer_text.color, timer_text.scale = color.red, 2.5
+        timer_text.color = color.red
+        timer_text.scale = 2.5
     timer_text.text = f"{max(0.0, time_left):.1f}s"
     
     # Eventos de Coleta e Entrega
     if not has_item and item.enabled and distance(player.position, item.position) < 4.5: 
-        has_item, status_text.text, status_text.color = True, "BATERIA COLETADA! LEVE ATÉ A BASE VERDE!", color.lime
+        has_item = True
+        status_text.text = "BATERIA COLETADA! LEVE ATÉ A BASE VERDE!"
+        status_text.color = color.lime
         item.disable()
         
     if has_item and distance(player.position, base_delivery.position) < 9.0: 
-        deliveries_made, time_cores, has_item, status_text.text, status_text.color = deliveries_made + 1, time_cores + 1, False, "ENTREGA FEITA! +1 NÚCLEO TEMPORAL!", color.yellow
+        deliveries_made += 1
+        time_cores += 1
+        has_item = False
+        status_text.text = "ENTREGA FEITA! +1 NÚCLEO TEMPORAL!"
+        status_text.color = color.yellow
         respawn_item()
         
     # Fim do Tempo (LOJA)
     if time_left <= 0: 
-        has_item, player.position, player.rotation, in_shop = False, (0, 1.5, 0), (0, 0, 0), True
+        has_item = False
+        player.position = (0, 1.5, 0)
+        player.rotation = (0, 0, 0)
+        in_shop = True
         shop_panel.enable()
 
 app.run()
