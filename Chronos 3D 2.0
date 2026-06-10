@@ -2,6 +2,18 @@ from ursina import *
 import random
 import math
 import sys
+import os
+
+# 🛠️ CORREÇÃO DEFINITIVA DE ESCALA PARA WINDOWS (Anti-Interface Cortada)
+if os.name == 'nt': # Se o sistema operacional for Windows
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1) # Força o Windows a respeitar o tamanho real do jogo
+    except:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware() # Alternativa para versões mais antigas do Windows
+        except:
+            pass
 
 # Inicializa o motor do jogo 3D
 app = Ursina()
@@ -10,13 +22,13 @@ app = Ursina()
 camera.clip_plane_far = 600  
 scene.fog_density = 0        
 
-# 🛠️ CONFIGURAÇÕES DE JANELA UNIVERSAIS (Anti-corte para Linux e Windows)
+# 🛠️ CONFIGURAÇÕES DE JANELA UNIVERSAIS E REDIMENSIONÁVEIS
 window.fps_counter.enabled = True
-window.title = "Chronos Express 3D - Multiplatform Edition"
-window.fullscreen = False       # Garante que não vai travar resoluções nativas
-window.borderless = False       # Mantém a janela móvel com barra de título
-window.size = (1280, 720)       # Força uma resolução padrão HD estável em qualquer OS
-window.center_on_screen()       # Centraliza automaticamente na inicialização
+window.title = "Chronos Express 3D - Multiplatform Fixed"
+window.fullscreen = False       
+window.borderless = False       
+window.size = (1280, 720)       # Resolução padrão estável
+window.center_on_screen()       
 
 # --- VARIÁVEIS GLOBAIS DE JOGO & ECONOMIA ---
 base_loop_time = 30.0
@@ -111,7 +123,7 @@ vertical_velocity = 0
 CAMERA_TARGET_DISTANCE = -25
 CAMERA_TARGET_HEIGHT = 10
 
-# --- INTERFACE ---
+# --- INTERFACE (Ajustada para o padrão de tela fixa) ---
 timer_text = Text(text='', position=(0.5, 0.4), scale=2, origin=(0,0), color=color.white)
 score_text = Text(text='', position=(-0.7, 0.4), scale=1.5, color=color.green)
 status_text = Text(text='BUSQUE A BATERIA AMARELA NO MAPA GIGANTE!', position=(0, -0.35), scale=1.5, origin=(0,0), color=color.yellow)
@@ -210,7 +222,7 @@ def update():
     if move_direction.length() > 0:
         move_direction = move_direction.normalized()
         
-        # COLISÃO DINÂMICA: Ajusta o raio de detecção baseado na velocidade atual do player
+        # COLISÃO DINÂMICA
         ray_distance = max(2.0, (current_speed * time.dt) + 1.2)
         
         hit_info = raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_direction, distance=ray_distance, ignore=(player,))
