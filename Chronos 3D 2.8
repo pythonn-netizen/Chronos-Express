@@ -1,0 +1,518 @@
+import sys
+
+# 1. CONFIGURAÇÃO DE JANELA PADRÃO
+from panda3d.core import loadPrcFileData
+loadPrcFileData("", "win-size 1280 960") 
+loadPrcFileData("", "fullscreen false")  
+loadPrcFileData("", "undecorated false") 
+loadPrcFileData("", "framebuffer-hardware true")
+loadPrcFileData("", "framebuffer-software false")
+
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.user32.SetProcessDPIAware()
+    except:
+        pass
+
+from ursina import *
+import random
+import math
+
+# Inicializa o app
+app = Ursina()
+
+window.size = (1280, 960)
+window.fullscreen = False
+window.borderless = False
+window.center_on_screen()
+window.color = color.black
+
+# --- CONFIGURAÇÃO DA LENTE PANORÂMICA QUE VOCÊ GOSTOU ---
+camera.fov = 95  
+camera.clip_plane_near = 0.05
+
+# --- ESTADOS DO JOGO ---
+class GameState:
+    START_MENU = 0
+    PLAYING = 1
+    SHOP = 2
+    GAME_OVER = 3
+
+current_state = GameState.START_MENU
+
+# --- VARIÁVEIS DE JOGO & ECONOMIA ---
+base_loop_time = 45.0  
+time_left = base_loop_time
+deliveries_made = 0
+score = 0
+time_cores = 0  
+has_item = False
+elapsed_time = 0.0
+
+combo_multiplier = 1
+combo_timer = 0.0
+
+player_speed_base = 45.0  
+jump_height_base = 15.0
+dash_cooldown = 0.0
+boost_duration = 0.0
+
+# Sistema de física do Dash
+dash_impulse_duration = 0.0
+dash_direction = Vec3(0,0,0)
+dash_force = 135.0 
+
+current_player_speed = player_speed_base
+current_jump_height = jump_height_base
+
+speed_lvl = 1
+jump_lvl = 1
+time_lvl = 1
+
+cam_shake_amount = 0.0
+startup_buffer = 0.5
+
+# --- MAPA GIGANTE ---
+map_size = 1000
+floor = Entity(model='cube', scale=(map_size, 0.1, map_size), y=0, color=color.dark_gray, collider='box')
+
+# Barreiras externas
+Entity(model='cube', scale=(10, 60, map_size), x=-map_size/2, y=5, color=color.gray, collider='box')
+Entity(model='cube', scale=(10, 60, map_size), x=map_size/2, y=5, color=color.gray, collider='box')
+Entity(model='cube', scale=(map_size, 60, 10), z=-map_size/2, y=5, color=color.gray, collider='box')
+Entity(model='cube', scale=(map_size, 60, 10), z=map_size/2, y=5, color=color.gray, collider='box')
+
+# Prédios Neon Ciberpunk
+neon_colors = [color.rgba(255,0,255,180), color.rgba(0,255,255,180), color.rgba(128,0,255,180), color.rgba(0,128,255,180)]
+for i in range(250):
+    bx = random.randint(int(-map_size/2 + 30), int(map_size/2 - 30))
+    bz = random.randint(int(-map_size/2 + 30), int(map_size/2 - 30))
+    if distance((bx, 0, bz), (-400, 0, 400)) > 40 and distance((bx, 0, bz), (400,0,-400)) > 40:
+        Entity(model='cube', position=(bx, random.randint(10, 35), bz), 
+               scale=(random.randint(12, 24), random.randint(20, 70), random.randint(12, 24)), 
+               color=random.choice(neon_colors), collider='box')
+
+# Armadilhas de Desaceleração
+traps = []
+for i in range(35):
+    tx = random.randint(int(-map_size/2 + 50), int(map_size/2 - 50))
+    tz = random.randint(int(-map_size/2 + 50), int(map_size/2 - 50))
+    t = Entity(model='cube', scale=(15, 0.2, 15), position=(tx, 0.05, tz), color=color.red, collider='box')
+    t.collider.is_trigger = True
+    traps.append(t)
+
+# Speed Pads
+speed_pads = []
+for i in range(20):
+    px = random.randint(int(-map_size/2 + 50), int(map_size/2 - 50))
+    pz = random.randint(int(-map_size/2 + 50), int(map_size/2 - 50))
+    pad = Entity(model='cube', scale=(10, 0.1, 10), position=(px, 0.06, pz), color=color.lime)
+    Entity(parent=pad, model='cube', rotation_y=45, scale=(0.4, 3.0, 0.4), y=0.5, color=color.black)
+    speed_pads.append(pad)
+
+# Moedas Temporais
+shards = []
+def spawn_shards():
+    for s in shards: destroy(s)
+    shards.clear()
+    for _ in range(15):
+        sx = random.randint(int(-map_size/2 + 40), int(map_size/2 - 40))
+        sz = random.randint(int(-map_size/2 + 40), int(map_size/2 - 40))
+        sh = Entity(model='sphere', scale=1.5, position=(sx, 2.5, sz), color=color.violet, collider='sphere')
+        shards.append(sh)
+
+# Drones Caçadores
+drones = []
+for i in range(10):
+    d_color = color.hex("#FF0033") if i == 0 else color.orange 
+    d = Entity(model='cube', scale=(3, 3, 3), color=d_color, position=(random.randint(-200, 200), i*2 + 4, random.randint(-200, 200)), collider='box')
+    d.target_x = random.randint(int(-map_size/2 + 40), int(map_size/2 - 40))
+    d.target_z = random.randint(int(-map_size/2 + 40), int(map_size/2 - 40))
+    d.is_stalker = (i == 0)
+    drones.append(d)
+
+# Objetivos
+base_delivery = Entity(model='cube', position=(-400, 4, 400), scale=(16, 8, 16), color=color.green, collider='box')
+base_delivery.collider.is_trigger = True  
+base_light = Entity(model='sphere', position=(-400, 12, 400), scale=4, color=color.lime)
+
+item = Entity(model='sphere', position=(400, 2.0, -400), scale=3, color=color.yellow, collider='sphere')
+item_ring = Entity(parent=item, model='cube', scale=(3.5, 0.1, 3.5), color=color.cyan)
+
+# Jogador
+player = Entity(model='cube', color=color.cyan, position=(0, 1.5, 0), scale=(1.5, 3, 1.5), collider='box')
+player_eyes = Entity(parent=player, model='cube', color=color.white, position=(0, 0.4, 0.4), scale=(0.8, 0.2, 0.2))
+
+camera.parent = scene
+is_jumping, vertical_velocity = False, 0
+
+# --- INTERFACE DE USUÁRIO (UI) TEXTO PURO ---
+hud_container = Entity(parent=camera.ui, enabled=False)
+
+timer_text = Text(parent=hud_container, text='', position=(0.65, 0.4), scale=2.0, color=color.red, origin=(1,1)) 
+score_text = Text(parent=hud_container, text='', position=(-0.85, 0.4), scale=1.4, color=color.green, origin=(-1,1)) 
+status_text = Text(parent=hud_container, text='', position=(0, 0.33), scale=1.1, color=color.cyan, origin=(0,1)) 
+help_text = Text(parent=hud_container, text='[WASD] Mover | [J L] Câmera | [ESPAÇO] Pular | [SHIFT] Dash', position=(0, -0.44), scale=1.0, color=color.light_gray, origin=(0,-1)) 
+
+# TEXTO ÚNICO CENTRALIZADO: Imune a cortes horizontais e variações de tela
+radar_text = Text(parent=hud_container, text='', scale=1.6, position=(0, 0.44), origin=(0, 0))
+
+menu_background = Entity(parent=camera.ui, model='quad', scale=(2, 2), color=color.black90, z=0, enabled=True)
+
+start_title = Text(parent=camera.ui, text="CYBER LOOP: COURIER", scale=2.5, origin=(0,0), color=color.cyan, position=(0, 0.15), z=-0.1)
+start_desc = Text(parent=camera.ui, text="Colete as baterias amarelas e entregue na base verde.\n\n[ Pressione ESPAÇO para Iniciar ]", scale=1.2, origin=(0,0), color=color.magenta, position=(0, -0.05), z=-0.1)
+
+shop_title = Text(parent=camera.ui, text="--- LOJA TEMPORAL ---", scale=2.5, origin=(0,0), color=color.cyan, position=(0, 0.15), z=-0.1, enabled=False)
+shop_cores_text = Text(parent=camera.ui, text="", scale=1.3, origin=(0,0), color=color.yellow, position=(0, 0.0), z=-0.1, enabled=False)
+shop_desc = Text(parent=camera.ui, text="[1] +Velocidade  |  [2] +Super Pulo  |  [3] +Tempo\n\nPressione [ENTER] para reiniciar o loop", scale=1.1, origin=(0,0), color=color.white, position=(0, -0.15), z=-0.1, enabled=False)
+
+game_over_title = Text(parent=camera.ui, text="CONEXAO REJEITADA\n-- LOOP ROMPIDO --", scale=2.5, origin=(0,0), color=color.red, position=(0, 0.15), z=-0.1, enabled=False)
+game_over_stats = Text(parent=camera.ui, text="", scale=1.3, origin=(0,0), color=color.yellow, position=(0, -0.02), z=-0.1, enabled=False)
+game_over_desc = Text(parent=camera.ui, text="[ Pressione ENTER para Tentar Novamente ]", scale=1.1, origin=(0,0), color=color.white, position=(0, -0.15), z=-0.1, enabled=False)
+
+# Luz Global
+main_light = DirectionalLight(y=2, z=-3, x=1)
+main_light.look_at(Vec3(0,0,0))
+
+def spawn_particles(pos, p_color, amount=12):
+    for _ in range(amount):
+        p = Entity(model='cube', position=pos + Vec3(random.uniform(-1,1), random.uniform(0,2), random.uniform(-1,1)),
+                   scale=random.uniform(0.2, 0.5), color=p_color)
+        p.animate_scale(0, duration=0.4, curve=curve.linear)
+        p.animate_position(p.position + Vec3(random.uniform(-3,3), random.uniform(1,4), random.uniform(-3,3)), duration=0.4)
+        destroy(p, delay=0.4)
+
+def respawn_item():
+    valid_spawn = False
+    while not valid_spawn:
+        rx = random.randint(int(-map_size/2 + 60), int(map_size/2 - 60))
+        rz = random.randint(int(-map_size/2 + 60), int(map_size/2 - 60))
+        if distance((rx, 0, rz), base_delivery.position) > 200 and distance((rx, 0, rz), player.position) > 100:
+            item.x, item.z = rx, rz
+            valid_spawn = True
+    item.y = 2.0
+    item.enable() 
+
+def switch_ui_state(state):
+    start_title.enabled = False
+    start_desc.enabled = False
+    shop_title.enabled = False
+    shop_cores_text.enabled = False
+    shop_desc.enabled = False
+    game_over_title.enabled = False
+    game_over_stats.enabled = False
+    game_over_desc.enabled = False
+    
+    if state == GameState.START_MENU:
+        menu_background.enabled = True
+        start_title.enabled = True
+        start_desc.enabled = True
+        hud_container.enabled = False
+    elif state == GameState.SHOP:
+        menu_background.enabled = True
+        shop_title.enabled = True
+        shop_cores_text.enabled = True
+        shop_desc.enabled = True
+        hud_container.enabled = False
+    elif state == GameState.GAME_OVER:
+        menu_background.enabled = True
+        game_over_title.enabled = True
+        game_over_stats.enabled = True
+        game_over_desc.enabled = True
+        hud_container.enabled = False
+    elif state == GameState.PLAYING:
+        menu_background.enabled = False
+        hud_container.enabled = True
+
+def start_new_game():
+    global current_state, time_left, deliveries_made, score, time_cores, has_item, elapsed_time
+    global current_player_speed, current_jump_height, base_loop_time, speed_lvl, jump_lvl, time_lvl, startup_buffer
+    global combo_multiplier, combo_timer, boost_duration, cam_shake_amount, dash_impulse_duration, dash_cooldown
+
+    base_loop_time = 45.0
+    time_left = base_loop_time
+    deliveries_made = 0
+    score = 0
+    time_cores = 0
+    has_item = False
+    elapsed_time = 0.0
+    combo_multiplier = 1
+    combo_timer = 0.0
+    boost_duration = 0.0
+    dash_cooldown = 0.0
+    dash_impulse_duration = 0.0
+    cam_shake_amount = 0.0
+    startup_buffer = 0.5
+
+    current_player_speed = player_speed_base
+    current_jump_height = jump_height_base
+    speed_lvl = 1
+    jump_lvl = 1
+    time_lvl = 1
+
+    player.position = (0, 1.5, 0)
+    player.rotation = (0, 0, 0)
+    
+    item.disable()
+    respawn_item()
+    spawn_shards()
+    
+    current_state = GameState.PLAYING
+    switch_ui_state(GameState.PLAYING)
+
+def input(key):
+    global is_jumping, vertical_velocity, current_state, time_left, base_loop_time, time_cores, current_player_speed, current_jump_height, speed_lvl, jump_lvl, time_lvl, has_item
+    global dash_cooldown, dash_impulse_duration, dash_direction, cam_shake_amount
+
+    if key == 'escape': 
+        sys.exit()
+    
+    if current_state == GameState.START_MENU:
+        if key == 'space':
+            start_new_game()
+        return
+
+    if current_state == GameState.GAME_OVER:
+        if key == 'enter':
+            start_new_game()
+        return
+        
+    if current_state == GameState.SHOP:
+        if key == '1' and time_cores >= 1: 
+            time_cores -= 1
+            current_player_speed += 8.0
+            speed_lvl += 1
+        elif key == '2' and time_cores >= 1: 
+            time_cores -= 1
+            current_jump_height += 3.0
+            jump_lvl += 1
+        elif key == '3' and time_cores >= 1: 
+            time_cores -= 1
+            base_loop_time += 8.0
+            time_lvl += 1
+        elif key == 'enter': 
+            time_left = base_loop_time
+            has_item = False
+            item.disable()
+            respawn_item()
+            spawn_shards()
+            current_state = GameState.PLAYING
+            switch_ui_state(GameState.PLAYING)
+        return
+        
+    if current_state == GameState.PLAYING:
+        if key == 'space' and not is_jumping and startup_buffer <= 0: 
+            is_jumping = True
+            vertical_velocity = current_jump_height
+            spawn_particles(player.position, color.cyan, amount=6)
+            
+        if key == 'left shift' and dash_cooldown <= 0 and startup_buffer <= 0:
+            dash_cooldown = 1.0          
+            dash_impulse_duration = 0.22  
+            dash_direction = player.forward  
+            cam_shake_amount = 0.7       
+            spawn_particles(player.position, color.magenta, amount=12)
+
+def update():
+    global time_left, deliveries_made, score, time_cores, has_item, elapsed_time, current_player_speed, is_jumping, vertical_velocity, current_state, dash_cooldown, startup_buffer, combo_multiplier, combo_timer, boost_duration, cam_shake_amount, main_light
+    global dash_impulse_duration, dash_direction, dash_force
+
+    # --- SUA CÂMERA DINÂMICA ORIGINAL DE VOLTA ---
+    target_cam_pos = player.position - player.forward * 38 + Vec3(0, 24, 0)
+    ray_start = player.position + Vec3(0, 10, 0)
+    
+    ray = raycast(origin=ray_start, 
+                  direction=(target_cam_pos - ray_start).normalized(), 
+                  distance=38, ignore=(player, floor, item, base_delivery))
+    
+    if ray.hit and ray.distance < 37.0:
+        camera.position = ray_start + (target_cam_pos - ray_start).normalized() * max(5.0, ray.distance - 1.5)
+    else:
+        camera.position = lerp(camera.position, target_cam_pos, time.dt * 12.0)
+        
+    if cam_shake_amount > 0:
+        camera.position += Vec3(random.uniform(-1,1), random.uniform(-1,1), random.uniform(-1,1)) * cam_shake_amount
+        cam_shake_amount -= time.dt * 4.0
+        
+    camera.look_at(player.position + Vec3(0, 1.5, 0))
+
+    if current_state != GameState.PLAYING:
+        if current_state == GameState.SHOP:
+            shop_cores_text.text = f"Nucleos Disponiveis: {time_cores}\n\n[1] Velocidade (Lvl {speed_lvl})\n[2] Altura do Pulo (Lvl {jump_lvl})\n[3] Tempo do Loop (Lvl {time_lvl})"
+        return
+
+    if startup_buffer > 0:
+        startup_buffer -= time.dt
+        status_text.text = "ESTABILIZANDO ENGINE... AGUARDE"
+        return
+
+    dt = min(time.dt, 0.03)
+    time_left -= dt
+    elapsed_time += dt
+    if dash_cooldown > 0: dash_cooldown -= dt
+    
+    if combo_timer > 0:
+        combo_timer -= dt
+        if combo_timer <= 0:
+            combo_multiplier = 1
+            
+    # --- PROCESSAMENTO DO RADAR CENTRALIZADO ---
+    dist_to_item = distance(player.position, item.position)
+    dist_to_base = distance(player.position, base_delivery.position)
+    
+    def get_radar_arrow(target_pos):
+        to_target_2d = Vec2(target_pos.x - player.position.x, target_pos.z - player.position.z).normalized()
+        forward_2d = Vec2(player.forward.x, player.forward.z).normalized()
+        
+        dot = forward_2d.dot(to_target_2d)
+        det = forward_2d.x * to_target_2d.y - forward_2d.y * to_target_2d.x
+        
+        if dot > 0.65: return "^ EM FRENTE"    
+        if dot < -0.65: return "v ATRAS"   
+        if det > 0: return "-> DIREITA"     
+        return "<- ESQUERDA"                 
+
+    # Atualiza o texto central único dependendo do estado da bateria
+    if not has_item:
+        arrow_item = get_radar_arrow(item.position)
+        radar_text.text = f"BUSCAR BATERIA: {arrow_item} ({int(dist_to_item)}m)"
+        radar_text.color = color.yellow
+    else:
+        arrow_base = get_radar_arrow(base_delivery.position)
+        radar_text.text = f"LEVAR A BASE: {arrow_base} ({int(dist_to_base)}m)"
+        radar_text.color = color.lime
+    
+    score_text.text = f'Pontos: {score} ({combo_multiplier}x)\nEntregas: {deliveries_made}\nNucleos: {time_cores}'
+    
+    # --- MOVIMENTAÇÃO PADRÃO ---
+    arrow_left_active = max(held_keys['arrow left'], held_keys['left arrow'])
+    arrow_right_active = max(held_keys['arrow right'], held_keys['right arrow'])
+    arrow_up_active = max(held_keys['arrow up'], held_keys['up arrow'])
+    arrow_down_active = max(held_keys['arrow down'], held_keys['down arrow'])
+
+    turn_input = (held_keys['l'] - held_keys['j']) + (arrow_right_active - arrow_left_active)
+    player.rotation_y += turn_input * 150.0 * dt
+    
+    move_forward = (held_keys['w'] - held_keys['s']) + (arrow_up_active - arrow_down_active)
+    move_sideways = (held_keys['d'] - held_keys['a'])
+    
+    current_speed = current_player_speed
+    status_text.text = 'ENTREGUE A BATERIA NA BASE VERDE!' if has_item else 'BUSQUE A BATERIA AMARELA NO MAPA GIGANTE!'
+    
+    for t in traps:
+        if distance(player.position, t.position) < 8.0 and player.y <= 1.5: 
+            current_speed = current_player_speed * 0.4
+            status_text.text = "ALERTA: CAMPO DE REDUCAO!"
+            
+    for pad in speed_pads:
+        if distance(player.position, pad.position) < 6.0 and player.y <= 1.6:
+            boost_duration = 1.2
+            cam_shake_amount = 0.5
+            
+    if boost_duration > 0:
+        boost_duration -= dt
+        current_speed *= 2.0
+    
+    if dash_impulse_duration <= 0:
+        move_dir = (player.forward * move_forward + player.right * move_sideways)
+        if move_dir.length() > 0:
+            move_dir = move_dir.normalized()
+            if not raycast(origin=player.position + Vec3(0, 0.5, 0), direction=move_dir, distance=2.0, ignore=(player,)).hit: 
+                player.position += move_dir * current_speed * dt
+                
+                if random.randint(1, 6) == 1:
+                    t_block = Entity(model='cube', position=player.position, scale=player.scale * 0.5, color=color.rgba(0,255,255,100))
+                    t_block.animate_scale(0, duration=0.25)
+                    destroy(t_block, delay=0.25)
+    else:
+        dash_impulse_duration -= dt
+        if not raycast(origin=player.position + Vec3(0, 0.5, 0), direction=dash_direction, distance=3.0, ignore=(player,)).hit:
+            player.position += dash_direction * dash_force * dt
+            
+            t_block = Entity(model='cube', position=player.position, scale=player.scale * 0.6, color=color.rgba(255,0,255,150))
+            t_block.animate_scale(0, duration=0.2)
+            destroy(t_block, delay=0.2)
+            
+    for d in drones:
+        if d.is_stalker and distance(player.position, d.position) < 70.0:
+            d.look_at(player.position)
+            d.position += d.forward * 30 * dt
+        else:
+            t_pos = Vec3(d.target_x, d.y, d.target_z)
+            if distance(d.position, t_pos) > 2.0: 
+                d.look_at(t_pos)
+                d.position += d.forward * 24 * dt  
+            if distance(d.position, t_pos) < 6.0: 
+                d.target_x = random.randint(int(-map_size/2 + 40), int(map_size/2 - 40))
+                d.target_z = random.randint(int(-map_size/2 + 40), int(map_size/2 - 40))
+        
+        if distance(player.position, d.position) < 4.0: 
+            time_left -= 5 * dt
+            cam_shake_amount = 0.8
+            spawn_particles(d.position, color.orange, amount=4)
+            
+    for sh in shards:
+        if sh.enabled:
+            sh.rotation_y += 90 * dt
+            if distance(player.position, sh.position) < 4.5:
+                sh.disable()
+                time_left += 3.0
+                spawn_particles(sh.position, color.violet, amount=6)
+
+    if is_jumping:
+        player.y += vertical_velocity * dt
+        vertical_velocity -= 38 * dt 
+        if player.y <= 1.5: 
+            player.y = 1.5
+            is_jumping = False
+            vertical_velocity = 0
+    
+    if item.enabled: 
+        item.rotation_y += 45 * dt
+        item_ring.rotation_x += 90 * dt
+        item_ring.rotation_z += 45 * dt
+        item.y = 2.0 + math.sin(elapsed_time * 5) * 0.3
+        
+    if time_left <= 5: 
+        pulse = abs(math.sin(elapsed_time * 20))
+        timer_text.color = color.red
+        timer_text.scale = 2.0 + pulse * 0.2
+        main_light.color = Vec4(1.0, 1.0 - pulse, 1.0 - pulse, 1.0)
+    else: 
+        timer_text.color = color.red
+        timer_text.scale = 2.0
+        main_light.color = Vec4(1.0, 1.0, 1.0, 1.0)
+
+    timer_text.text = f"{max(0.0, time_left):.1f}s"
+    
+    if not has_item and item.enabled and dist_to_item < 5.5: 
+        has_item = True
+        cam_shake_amount = 0.5
+        spawn_particles(item.position, color.yellow, amount=15)
+        item.disable()
+        
+    if has_item and dist_to_base < 14.0: 
+        deliveries_made += 1
+        time_cores += 1
+        score += 100 * combo_multiplier
+        
+        combo_multiplier = min(combo_multiplier + 1, 5)
+        combo_timer = 15.0 
+        
+        has_item = False
+        spawn_particles(base_delivery.position, color.green, amount=20)
+        respawn_item()
+        
+    if time_left <= 0:
+        time_left = 0
+        
+        if time_cores > 0:
+            current_state = GameState.SHOP
+            switch_ui_state(GameState.SHOP)
+        else:
+            current_state = GameState.GAME_OVER
+            game_over_stats.text = f"Pontuacao Final: {score}\nTotal de Entregas: {deliveries_made}"
+            switch_ui_state(GameState.GAME_OVER)
+
+app.run()
