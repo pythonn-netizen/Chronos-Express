@@ -1,0 +1,645 @@
+import pygame
+import random
+import sys
+import math
+
+pygame.init()
+
+# Configurações da Tela (960x600)
+WIDTH, HEIGHT = 960, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Chronos Express v9.0 - Era of Effects")
+clock = pygame.time.Clock()
+
+# Cores Cyberpunk Estáticas
+WHITE = (240, 240, 240)
+CYAN = (0, 255, 255)       # Jogador
+YELLOW = (255, 255, 0)     # Bateria / Alerta
+GREEN = (0, 255, 120)      # Base original (Sempre Verde!)
+BLUE = (0, 150, 255)       # Escudo / Dash
+RED = (255, 50, 70)        # Inimigo / Alerta Crítico
+ORANGE = (255, 130, 0)     # Inimigo Perseguidor
+BLACK = (0, 0, 0)          # Sombra / Fundo de Menu
+
+# PALETA DE CORES EXPANDIDA POR FASE (Fundo, Obstáculo Interno, Borda do Obstáculo, Nome da Fase)
+PHASE_THEMES = {
+    1: ((10, 10, 15),     (40, 40, 50),     (80, 80, 100),    "NEON CITY"),
+    2: ((25, 18, 10),     (60, 45, 30),     (140, 100, 60),   "OVERDRIVE DESERT"),
+    3: ((10, 25, 15),     (30, 55, 40),     (70, 150, 100),   "NUCLEAR CORE"),
+    4: ((18, 10, 25),     (45, 30, 60),     (120, 70, 160),   "VOID RIFT"),
+    5: ((25, 10, 12),     (60, 30, 35),     (160, 60, 80),    "PARADOX MATRIX"),
+    6: ((10, 25, 30),     (30, 60, 70),     (60, 160, 200),   "AQUATIC SPHERE"),
+    7: ((30, 10, 30),     (65, 30, 65),     (180, 70, 180),   "CHRONOS SINGULARITY")
+}
+
+# PARTÍCULAS E EFEITOS ESPECÍFICOS POR ERA (Tipo, Cor, Velocidade, Tamanho base, Qtd)
+PHASE_EFFECTS = {
+    1: ("GRID",       (0, 100, 100),   0,      0,    0),   # Grid Neon
+    2: ("DUST_UP",   (200, 150, 50),  -0.5,   2,    80),  # Poeira Desértica
+    3: ("FALL_RAD",  (50, 200, 50),   1.2,    3,    60),  # Radiação Nuclear
+    4: ("VOID_C",    (50, 0, 80),     2.0,    1,    100), # Código Void
+    5: ("GLITCH_S",  (100, 0, 0),     0,      0,    0),   # Glitch estático
+    6: ("BUBBLES",   (100, 200, 255), -0.8,   4,    70),  # Bolhas Aquáticas
+    7: ("CONVERGE",  (150, 0, 150),   -1.5,   2,    90)   # Convergência da Singularidade
+}
+
+# Fontes
+font_sm = pygame.font.SysFont("Arial", 19, bold=True)
+font_md = pygame.font.SysFont("Arial", 26, bold=True)
+font_lg = pygame.font.SysFont("Arial", 55, bold=True)
+
+# Estados do Jogo
+STATE_MENU = "MENU"
+STATE_PLAYING = "PLAYING"
+STATE_UPGRADE = "UPGRADE"
+STATE_GAME_OVER = "GAME_OVER"
+STATE_VICTORY = "VICTORY"
+current_state = STATE_MENU
+
+LOOP_TIME = 30.0
+MAX_DELIVERIES = 30 # Limite estabelecido
+time_left = LOOP_TIME
+deliveries_made = 0
+current_phase = 1
+
+# Lista de partículas global (reiniciada por fase)
+background_particles = []
+
+class Player:
+    def __init__(self):
+        self.size = 25
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+        self.reset_pos()
+        
+        self.base_speed = 250.0  
+        self.dash_cooldown_max = 1.5
+        self.shield_duration_max = 5.0
+        
+        self.speed = self.base_speed
+        self.has_item = False
+        self.shield_timer = 0.0 
+        self.dash_timer = 0.0
+        self.dash_cooldown = 0.0
+        self.dash_speed_multiplier = 3.5 # Dash um pouco mais rápido
+        self.is_dashing = False
+        self.move_dir = [0, 0]
+        self.last_non_zero_dir = [1, 0]
+        self.invincible_timer = 0.0 
+        self.dash_ghosts = []
+
+    def reset_pos(self):
+        self.rect.x = WIDTH // 2
+        self.rect.y = HEIGHT // 2
+        self.shield_timer = 0.0
+        self.dash_timer = 0.0
+        self.dash_cooldown = 0.0
+        self.is_dashing = False
+        self.invincible_timer = 0.0
+        self.dash_ghosts = []
+
+    def trigger_dash(self):
+        if self.dash_cooldown <= 0 and (self.move_dir[0] != 0 or self.move_dir[1] != 0):
+            self.is_dashing = True
+            self.dash_timer = 0.15 
+            self.dash_cooldown = self.dash_cooldown_max
+
+    def move(self, keys, obstacles, speed_zones, slow_zones, dt):
+        if self.dash_cooldown > 0: self.dash_cooldown -= dt
+        if self.invincible_timer > 0: self.invincible_timer -= dt
+        
+        if self.dash_timer > 0:
+            self.dash_timer -= dt
+            if self.dash_timer <= 0: 
+                self.is_dashing = False
+
+        move_x, move_y = 0, 0
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]: move_x = -1
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: move_x = 1
+        if keys[pygame.K_UP] or keys[pygame.K_w]: move_y = -1
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]: move_y = 1
+
+        if move_x != 0 or move_y != 0:
+            length = math.sqrt(move_x**2 + move_y**2)
+            self.move_dir = [move_x / length, move_y / length]
+            self.last_non_zero_dir = self.move_dir
+        else:
+            self.move_dir = [0, 0]
+
+        current_speed = self.speed
+        if self.is_dashing:
+            current_speed = self.speed * self.dash_speed_multiplier
+            # O rastro fantasma agora tem a cor do dash
+            ghost_color = BLUE if self.has_item else CYAN
+            self.dash_ghosts.append((self.rect.copy(), 0.15, ghost_color))
+        else:
+            if any(self.rect.colliderect(zone) for zone in speed_zones):
+                current_speed = self.speed * 1.6
+            elif any(self.rect.colliderect(zone) for zone in slow_zones):
+                current_speed = self.speed * 0.5
+
+        eff_dir = self.last_non_zero_dir if self.is_dashing else self.move_dir
+
+        if eff_dir[0] != 0:
+            self.rect.x += eff_dir[0] * current_speed * dt
+            for obs in obstacles:
+                if self.rect.colliderect(obs):
+                    if eff_dir[0] > 0: self.rect.right = obs.left
+                    if eff_dir[0] < 0: self.rect.left = obs.right
+
+        if eff_dir[1] != 0:
+            self.rect.y += eff_dir[1] * current_speed * dt
+            for obs in obstacles:
+                if self.rect.colliderect(obs):
+                    if eff_dir[1] > 0: self.rect.bottom = obs.top
+                    if eff_dir[1] < 0: self.rect.top = obs.bottom
+
+        self.rect.clamp_ip(screen.get_rect())
+        # Atualização suave do rastro fantasma
+        self.dash_ghosts = [(g[0], g[1] - dt, g[2]) for g in self.dash_ghosts if g[1] > 0]
+
+    def draw(self, surface):
+        for ghost, time_active, color in self.dash_ghosts:
+            # Alpha diminui com o tempo
+            raw_alpha = int((time_active / 0.15) * 160)
+            alpha = max(0, min(255, raw_alpha)) 
+            s = pygame.Surface((self.size, self.size), pygame.SRCALPHA)
+            # Mescla cor do rastro com alpha
+            s.fill((*color[:3], alpha))
+            surface.blit(s, ghost.topleft)
+
+        if self.invincible_timer > 0 and int(self.invincible_timer * 12) % 2 == 0:
+            return 
+
+        pygame.draw.rect(surface, CYAN, self.rect)
+        if self.has_item:
+            pygame.draw.rect(surface, YELLOW, self.rect, 2)
+        if self.shield_timer > 0:
+            # Efeito de escudo mais visível
+            pygame.draw.rect(surface, BLUE, self.rect.inflate(10, 10), 3)
+
+class Collectible:
+    def __init__(self):
+        self.size = 20
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+
+    def spawn(self, base_rect, obstacles):
+        while True:
+            self.rect.x = random.randint(50, WIDTH - 50)
+            self.rect.y = random.randint(50, HEIGHT - 50)
+            if self.rect.colliderect(base_rect.inflate(20, 20)): continue
+            if any(self.rect.colliderect(obs) for obs in obstacles): continue
+            break
+
+    def draw(self, surface):
+        pygame.draw.ellipse(surface, YELLOW, self.rect)
+        pygame.draw.ellipse(surface, WHITE, self.rect.inflate(-6, -6), 2)
+
+class PowerUp:
+    def __init__(self):
+        self.size = 18
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+        self.active = False
+
+    def spawn(self, base_rect, obstacles):
+        self.active = True
+        while True:
+            self.rect.x = random.randint(50, WIDTH - 50)
+            self.rect.y = random.randint(50, HEIGHT - 50)
+            if self.rect.colliderect(base_rect): continue
+            if any(self.rect.colliderect(obs) for obs in obstacles): continue
+            break
+
+    def draw(self, surface):
+        if self.active:
+            pygame.draw.rect(surface, BLUE, self.rect)
+            pygame.draw.rect(surface, WHITE, self.rect, 2)
+
+class Enemy:
+    def __init__(self, obstacles, base_rect, enemy_type="BOUNCER"):
+        self.size = 20
+        self.rect = pygame.Rect(0, 0, self.size, self.size)
+        self.type = enemy_type 
+        
+        base_speed_mult = 1.0 + (current_phase - 1) * 0.15
+        self.speed = (160.0 if enemy_type == "BOUNCER" else 110.0) * base_speed_mult
+        
+        angle = random.uniform(0, 2 * math.pi)
+        self.vx = math.cos(angle) * self.speed
+        self.vy = math.sin(angle) * self.speed
+
+        while True:
+            self.rect.x = random.randint(100, WIDTH - 100)
+            self.rect.y = random.randint(100, HEIGHT - 100)
+            safe_center = pygame.Rect(WIDTH//2 - 100, HEIGHT//2 - 100, 200, 200)
+            if self.rect.colliderect(safe_center) or self.rect.colliderect(base_rect): continue
+            if any(self.rect.colliderect(obs) for obs in obstacles): continue
+            break
+
+    def update(self, player_rect, dt):
+        if self.type == "BOUNCER":
+            self.rect.x += self.vx * dt
+            self.rect.y += self.vy * dt
+            
+            if self.rect.left <= 0:
+                self.rect.left = 0
+                self.vx *= -1
+            elif self.rect.right >= WIDTH:
+                self.rect.right = WIDTH
+                self.vx *= -1
+                
+            if self.rect.top <= 0:
+                self.rect.top = 0
+                self.vy *= -1
+            elif self.rect.bottom >= HEIGHT:
+                self.rect.bottom = HEIGHT
+                self.vy *= -1
+        
+        elif self.type == "CHASER":
+            dx = player_rect.centerx - self.rect.centerx
+            dy = player_rect.centery - self.rect.centery
+            dist = math.hypot(dx, dy)
+            if dist != 0:
+                self.rect.x += (dx / dist) * self.speed * dt
+                self.rect.y += (dy / dist) * self.speed * dt
+
+    def draw(self, surface):
+        color = ORANGE if self.type == "CHASER" else RED
+        pygame.draw.rect(surface, color, self.rect)
+        pygame.draw.rect(surface, WHITE, self.rect, 1)
+
+def generate_map(base_rect, player_rect=None):
+    obstacles = []
+    player_safe = pygame.Rect(player_rect.x - 60, player_rect.y - 60, 150, 150) if player_rect else pygame.Rect(0,0,0,0)
+    safe_zone = pygame.Rect(WIDTH//2 - 60, HEIGHT//2 - 60, 120, 120)
+    
+    while len(obstacles) < 6:
+        obs_w = random.randint(70, 130)
+        obs_h = random.randint(70, 130)
+        obs_x = random.randint(100, WIDTH - 200)
+        obs_y = random.randint(100, HEIGHT - 200)
+        new_obs = pygame.Rect(obs_x, obs_y, obs_w, obs_h)
+        
+        if not new_obs.colliderect(safe_zone) and not new_obs.colliderect(base_rect) and not new_obs.colliderect(player_safe):
+            obstacles.append(new_obs)
+    return obstacles
+
+def generate_zones(obstacles, base_rect):
+    speed_zones, slow_zones = [], []
+    while len(speed_zones) < 3:
+        rz = pygame.Rect(random.randint(80, WIDTH - 150), random.randint(80, HEIGHT - 150), 70, 70)
+        if not rz.colliderect(base_rect) and not any(rz.colliderect(o) for o in obstacles):
+            speed_zones.append(rz)
+    while len(slow_zones) < 3:
+        rz = pygame.Rect(random.randint(80, WIDTH - 150), random.randint(80, HEIGHT - 150), 70, 70)
+        if not rz.colliderect(base_rect) and not any(rz.colliderect(o) for o in obstacles) and not any(rz.colliderect(s) for s in speed_zones):
+            slow_zones.append(rz)
+    return speed_zones, slow_zones
+
+# Inicialização das partículas de fundo
+def init_background_particles(effect_data):
+    particles = []
+    eff_type, color, vel, size, qty = effect_data
+    for _ in range(qty):
+        particles.append({
+            "x": random.randint(0, WIDTH),
+            "y": random.randint(0, HEIGHT),
+            "vel": random.uniform(vel * 0.7, vel * 1.3),
+            "size": random.uniform(size * 0.8, size * 1.2)
+        })
+    return particles
+
+# Atualização e desenho das partículas de fundo
+def update_and_draw_background(surface, critical):
+    global background_particles
+    
+    current_phase_eff = PHASE_EFFECTS[theme_idx]
+    eff_type = current_phase_eff[0]
+    eff_color = current_phase_eff[1]
+    
+    # Se crítico, particles ficam avermelhadas/rápidas
+    draw_color = RED if critical else eff_color
+    s_part = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+
+    if eff_type == "GRID":
+        grid_color = (*draw_color, 40)
+        for x in range(0, WIDTH + 1, 40):
+            pygame.draw.line(s_part, grid_color, (x, HEIGHT), (WIDTH // 2, HEIGHT // 2), 1)
+        for y in range(HEIGHT // 2, HEIGHT + 1, 20):
+            scale = (y - HEIGHT // 2) / (HEIGHT // 2)
+            pygame.draw.line(s_part, grid_color, (0, y), (WIDTH, y), 1)
+            
+    elif eff_type in ["DUST_UP", "FALL_RAD", "BUBBLES", "VOID_C"]:
+        particle_alpha = 100 if not critical else 180
+        for p in background_particles:
+            # Movimento
+            p["y"] += p["vel"]
+            
+            # Reposicionar partículas que saem da tela
+            if p["y"] < 0: p["y"] = HEIGHT
+            if p["y"] > HEIGHT: p["y"] = 0
+            
+            p_size = int(p["size"])
+            if eff_type == "VOID_C":
+                # Void code é um caractere aleatório (Matrix style)
+                char = random.choice("01$#%")
+                c_surface = font_sm.render(char, True, (*draw_color, particle_alpha))
+                s_part.blit(c_surface, (int(p["x"]), int(p["y"])))
+            elif eff_type == "BUBBLES":
+                # Bolhas são anéis
+                pygame.draw.circle(s_part, (*draw_color, particle_alpha), (int(p["x"]), int(p["y"])), p_size, 1)
+            else:
+                # Poeira/radiação são pontos
+                pygame.draw.circle(s_part, (*draw_color, particle_alpha), (int(p["x"]), int(p["y"])), p_size)
+
+    elif eff_type == "CONVERGE":
+        particle_alpha = 130 if not critical else 200
+        center_x, center_y = WIDTH // 2, HEIGHT // 2
+        for p in background_particles:
+            dx = center_x - p["x"]
+            dy = center_y - p["y"]
+            dist = math.hypot(dx, dy)
+            if dist > 5:
+                # Partículas se movem em direção ao centro
+                p["x"] += (dx / dist) * p["vel"]
+                p["y"] += (dy / dist) * p["vel"]
+                pygame.draw.circle(s_part, (*draw_color, particle_alpha), (int(p["x"]), int(p["y"])), int(p["size"]))
+            else:
+                # Reiniciar partículas que chegam ao centro
+                p["x"] = random.randint(0, WIDTH)
+                p["y"] = random.randint(0, HEIGHT)
+
+    surface.blit(s_part, (0,0))
+
+def draw_text_with_shadow(surface, text, font, color, pos, shadow_color=(0, 0, 0)):
+    text_shadow = font.render(text, True, shadow_color)
+    text_main = font.render(text, True, color)
+    surface.blit(text_shadow, (pos[0] + 2, pos[1] + 2))
+    surface.blit(text_main, pos)
+
+# Inicialização do Jogo
+base_rect = pygame.Rect(50, 50, 85, 85)
+player = Player()
+item = Collectible()
+powerup = PowerUp()
+obstacles = generate_map(base_rect, player.rect)
+speed_zones, slow_zones = generate_zones(obstacles, base_rect)
+enemies = [Enemy(obstacles, base_rect, "BOUNCER")]
+
+# Reiniciar partículas da Fase 1
+theme_idx = current_phase if current_phase in PHASE_EFFECTS else 1
+background_particles = init_background_particles(PHASE_EFFECTS[theme_idx])
+
+def reset_full_game():
+    global deliveries_made, time_left, obstacles, speed_zones, slow_zones, enemies, current_phase, background_particles
+    deliveries_made = 0
+    current_phase = 1
+    time_left = LOOP_TIME
+    player.base_speed = 250.0
+    player.speed = player.base_speed
+    player.dash_cooldown_max = 1.5
+    player.shield_duration_max = 5.0
+    player.reset_pos()
+    powerup.active = False
+    obstacles = generate_map(base_rect, player.rect)
+    speed_zones, slow_zones = generate_zones(obstacles, base_rect)
+    item.spawn(base_rect, obstacles)
+    enemies = [Enemy(obstacles, base_rect, "BOUNCER")]
+    
+    # Reiniciar partículas da Fase 1
+    background_particles = init_background_particles(PHASE_EFFECTS[current_phase])
+
+item.spawn(base_rect, obstacles)
+last_ticks = pygame.time.get_ticks()
+pulse_timer = 0 # Timer para a animação da base verde
+
+running = True
+while running:
+    current_ticks = pygame.time.get_ticks()
+    dt = (current_ticks - last_ticks) / 1000.0
+    last_ticks = current_ticks
+    
+    if dt > 0.1: dt = 0.1
+
+    theme_idx = current_phase if current_phase in PHASE_THEMES else max(PHASE_THEMES.keys())
+    bg_color, obs_color, border_color, phase_name = PHASE_THEMES[theme_idx]
+
+    if current_state == STATE_MENU:
+        screen.fill((10, 10, 15))
+        draw_text_with_shadow(screen, "CHRONOS EXPRESS", font_lg, CYAN, (WIDTH//2 - 270, HEIGHT//4), BLUE)
+        draw_text_with_shadow(screen, "30 segundos para salvar a linha do tempo!", font_md, WHITE, (WIDTH//2 - 210, HEIGHT//2 - 20))
+        draw_text_with_shadow(screen, f"Objetivo: Realize {MAX_DELIVERIES} Entregas totais.", font_sm, YELLOW, (WIDTH//2 - 130, HEIGHT//2 + 30))
+        draw_text_with_shadow(screen, "[Pressione ESPAÇO para Iniciar]", font_sm, CYAN, (WIDTH//2 - 140, HEIGHT//2 + 70))
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                reset_full_game()
+                current_state = STATE_PLAYING
+                last_ticks = pygame.time.get_ticks()
+
+    elif current_state == STATE_PLAYING:
+        time_left -= dt
+        pulse_timer += dt
+        if player.shield_timer > 0: player.shield_timer -= dt
+        
+        is_critical = time_left <= 5.0 and int(time_left * 6) % 2 == 0
+        if is_critical:
+            screen.fill((50, 10, 15)) 
+            current_obs_border = RED
+            current_base_color = RED  
+        else:
+            screen.fill(bg_color)     
+            current_obs_border = border_color
+            # A base verde fixada pisca levemente
+            pulse = math.sin(pulse_timer * 10) * 50 + 200
+            current_base_color = (0, pulse, pulse/2 + 60)
+
+        # Atualizar partículas de fundo temáticas
+        update_and_draw_background(screen, is_critical)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3: player.trigger_dash()
+            if event.type == pygame.KEYDOWN and event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT, pygame.K_SPACE]: player.trigger_dash()
+
+        keys = pygame.key.get_pressed()
+        player.move(keys, obstacles, speed_zones, slow_zones, dt)
+        for enemy in enemies: enemy.update(player.rect, dt)
+
+        if not player.has_item and player.rect.colliderect(item.rect):
+            player.has_item = True
+
+        if powerup.active and player.rect.colliderect(powerup.rect):
+            player.shield_timer = player.shield_duration_max 
+            powerup.active = False
+
+        if player.has_item and player.rect.colliderect(base_rect):
+            deliveries_made += 1
+            player.has_item = False
+            player.speed += 15.0 
+            time_left = min(LOOP_TIME, time_left + 8.0) 
+            
+            if deliveries_made >= MAX_DELIVERIES:
+                current_state = STATE_VICTORY
+            else:
+                obstacles = generate_map(base_rect, player.rect) 
+                speed_zones, slow_zones = generate_zones(obstacles, base_rect)
+                item.spawn(base_rect, obstacles)
+                
+                if not powerup.active and random.random() <= 0.35:
+                    powerup.spawn(base_rect, obstacles)
+
+                if deliveries_made % 5 == 0:
+                    current_phase += 1
+                    next_type = random.choice(["BOUNCER", "CHASER"])
+                    enemies.append(Enemy(obstacles, base_rect, next_type))
+                    
+                    # Inicializar novas partículas para a próxima fase
+                    next_theme_idx = current_phase if current_phase in PHASE_EFFECTS else max(PHASE_EFFECTS.keys())
+                    background_particles = init_background_particles(PHASE_EFFECTS[next_theme_idx])
+
+                    for e in enemies:
+                        e.speed *= 1.12
+                        if e.type == "BOUNCER":
+                            e.vx = math.copysign(e.speed * 0.7, e.vx)
+                            e.vy = math.copysign(e.speed * 0.7, e.vy)
+
+                    current_state = STATE_UPGRADE
+
+        if player.shield_timer <= 0 and player.invincible_timer <= 0:
+            for enemy in enemies:
+                if player.rect.colliderect(enemy.rect):
+                    time_left -= 4.0  
+                    player.invincible_timer = 1.2 
+                    break 
+
+        if time_left <= 0:
+            current_state = STATE_GAME_OVER
+
+        for zone in speed_zones:
+            # Efeito neon nas zonas
+            pulse_cyan = math.sin(pulse_timer * 15) * 60 + 190
+            pygame.draw.rect(screen, (0, 40, 20), zone)
+            pygame.draw.rect(screen, RED if is_critical else (0, pulse_cyan, pulse_cyan), zone, 1)
+        for zone in slow_zones:
+            pygame.draw.rect(screen, (25, 10, 40), zone)
+            pygame.draw.rect(screen, RED if is_critical else border_color, zone, 1)
+
+        # Base verde fixada com "pulso neon"
+        pygame.draw.rect(screen, GREEN, base_rect, 1) 
+        pygame.draw.rect(screen, current_base_color, base_rect.inflate(-4,-4), 2)
+        
+        for obs in obstacles:
+            pygame.draw.rect(screen, obs_color, obs)
+            pygame.draw.rect(screen, current_obs_border, obs, 1)
+        
+        if not player.has_item: item.draw(screen)
+        powerup.draw(screen)
+        player.draw(screen)
+        for enemy in enemies: enemy.draw(screen)
+
+        # ================= UI CONTROLADA =================
+        timer_color = RED if time_left <= 5 else WHITE
+        draw_text_with_shadow(screen, f"{max(0.0, time_left):.1f}s", font_lg, timer_color, (WIDTH - 150, 20))
+        
+        full_phase_string = f"ÉPOCA: {phase_name} (FASE {current_phase})"
+        phase_surface = font_md.render(full_phase_string, True, border_color)
+        phase_x = (WIDTH - phase_surface.get_width()) // 2
+        draw_text_with_shadow(screen, full_phase_string, font_md, border_color, (phase_x, HEIGHT - 110))
+        
+        draw_text_with_shadow(screen, f"ENTREGAS: {deliveries_made}/{MAX_DELIVERIES}", font_sm, WHITE, (20, HEIGHT - 70))
+        speed_percentage = int((player.speed / 250.0) * 100)
+        draw_text_with_shadow(screen, f"VELOCIDADE: {speed_percentage}%", font_sm, CYAN, (20, HEIGHT - 40))
+
+        if player.dash_cooldown > 0:
+            draw_text_with_shadow(screen, "DASH: RECARGANDO", font_sm, RED, (WIDTH - 240, HEIGHT - 40))
+        else:
+            # DASH PRONTO AGORA É AZUL SE TIVER ITEM
+            dash_color = BLUE if player.has_item else CYAN
+            draw_text_with_shadow(screen, "DASH: PRONTO! [Shift]", font_sm, dash_color, (WIDTH - 240, HEIGHT - 40))
+
+        if player.shield_timer > 0:
+            draw_text_with_shadow(screen, f"ESCUDO: {player.shield_timer:.1f}s", font_sm, BLUE, (WIDTH - 240, HEIGHT - 70))
+        elif player.invincible_timer > 0:
+            draw_text_with_shadow(screen, f"IMUNIDADE: {player.invincible_timer:.1f}s", font_sm, WHITE, (WIDTH - 240, HEIGHT - 70))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    elif current_state == STATE_UPGRADE:
+        screen.fill((15, 15, 25))
+        
+        # Textos do título e subtítulo
+        title_text = f"ERA {phase_name} ALCANÇADA!"
+        subtitle_text = "Escolha o seu Módulo Temporal [1], [2] ou [3]:"
+        
+        # Renderizadores temporários para calcular a largura dinâmica
+        title_surface = font_lg.render(title_text, True, border_color)
+        subtitle_surface = font_md.render(subtitle_text, True, WHITE)
+        
+        # Centralização automática perfeita na horizontal
+        title_x = (WIDTH - title_surface.get_width()) // 2
+        subtitle_x = (WIDTH - subtitle_surface.get_width()) // 2
+        
+        # Desenhando com as sombras nativas do jogo
+        draw_text_with_shadow(screen, title_text, font_lg, border_color, (title_x, HEIGHT//5), BLACK)
+        draw_text_with_shadow(screen, subtitle_text, font_md, WHITE, (subtitle_x, HEIGHT//3 + 20))
+        
+        # Opções do Menu
+        opt1 = font_sm.render("[1] HIPER-MOTORES: +15% Velocidade Geral Permanente", True, CYAN)
+        opt2 = font_sm.render(f"[2] REBOBINAR DASH: Cooldown reduzido (Atual: {player.dash_cooldown_max:.1f}s)", True, BLUE)
+        opt3 = font_sm.render(f"[3] SUPER ESCUDO: Escudos duram +3 segundos extras", True, WHITE)
+        
+        # Alinhamento recuado em bloco (elegante em resoluções largas)
+        options_x = 160
+        screen.blit(opt1, (options_x, HEIGHT//2))
+        screen.blit(opt2, (options_x, HEIGHT//2 + 40))
+        screen.blit(opt3, (options_x, HEIGHT//2 + 80))
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.KEYDOWN:
+                upgraded = False
+                if event.key in [pygame.K_1, pygame.K_KP1]:
+                    player.base_speed *= 1.15
+                    player.speed = player.base_speed
+                    upgraded = True
+                elif event.key in [pygame.K_2, pygame.K_KP2]:
+                    player.dash_cooldown_max = max(0.4, player.dash_cooldown_max - 0.25)
+                    upgraded = True
+                elif event.key in [pygame.K_3, pygame.K_KP3]:
+                    player.shield_duration_max += 3.0
+                    upgraded = True
+                
+                if upgraded:
+                    current_state = STATE_PLAYING
+                    last_ticks = pygame.time.get_ticks() 
+
+    elif current_state == STATE_GAME_OVER:
+        screen.fill((25, 10, 10)) 
+        draw_text_with_shadow(screen, "LINHA TEMPORAL COLAPSOU", font_lg, RED, (WIDTH//2 - 230, HEIGHT//3))
+        draw_text_with_shadow(screen, f"Você se perdeu na época: {phase_name}", font_md, WHITE, (WIDTH//2 - 230, HEIGHT//2))
+        draw_text_with_shadow(screen, "Pressione ESPAÇO para retornar ao Menu", font_sm, CYAN, (WIDTH//2 - 150, HEIGHT - 120))
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                current_state = STATE_MENU
+
+    elif current_state == STATE_VICTORY:
+        screen.fill((10, 30, 20))
+        draw_text_with_shadow(screen, "LINHA DO TEMPO SALVA!", font_lg, GREEN, (WIDTH//2 - 240, HEIGHT//3))
+        draw_text_with_shadow(screen, f"Parabéns! Completou as {MAX_DELIVERIES} entregas com sucesso.", font_md, WHITE, (WIDTH//2 - 260, HEIGHT//2))
+        draw_text_with_shadow(screen, "Pressione ESPAÇO para retornar ao Menu", font_sm, CYAN, (WIDTH//2 - 150, HEIGHT - 120))
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                current_state = STATE_MENU
+
+pygame.quit()
+sys.exit()
